@@ -142,7 +142,7 @@ async function handleEvent(event) {
             delete userSessions[userId];
             return lineClient.replyMessage(replyToken, {
                 type: "text",
-                text: "已取消。",
+                text: "取消記錄，我要回去睡覺了喵~",
             });
         }
 
@@ -181,7 +181,7 @@ async function analyzeSessionData(images, texts) {
     return JSON.parse(chatCompletion.choices[0].message.content);
 }
 
-// 📝 ✨ Notion 存檔函式
+// Notion 存檔函式
 async function saveToNotion(data, userName) {
     try {
         await notion.pages.create({

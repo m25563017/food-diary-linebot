@@ -6,6 +6,11 @@ const { Client } = require("@notionhq/client");
 
 const app = express();
 
+// ✨ 這是喚醒服務專用的「門鈴」
+app.get("/", (req, res) => {
+    res.send("I'm alive! 機器人醒著喵！");
+});
+
 const userSessions = {};
 
 const lineConfig = {

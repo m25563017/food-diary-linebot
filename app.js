@@ -21,7 +21,7 @@ const lineClient = new line.Client(lineConfig);
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// ✨ 初始化 Notion Client
+// 初始化 Notion Client
 const notion = new Client({ auth: process.env.NOTION_API_KEY });
 
 app.post("/webhook", line.middleware(lineConfig), (req, res) => {
@@ -40,41 +40,44 @@ async function handleEvent(event) {
         event.source.groupId || event.source.roomId || event.source.userId;
 
     // -----------------------------------------------------------
-    // 🔔 第一關：監聽「啟動指令」
+    // 監聽「啟動指令」
     // -----------------------------------------------------------
     if (event.type === "message" && event.message.type === "text") {
         const text = event.message.text.trim();
-        if (["分析熱量", "開始記錄"].includes(text)) {
-            // 稍微放寬指令
+        if (["分析熱量"].includes(text)) {
             userSessions[userId] = { mode: "food", images: [], texts: [] };
             setTimeout(() => {
                 if (userSessions[userId]) delete userSessions[userId];
             }, 5 * 60 * 1000);
+
             return lineClient.replyMessage(replyToken, {
                 type: "text",
-                text: "喵喵！開始記錄！\n請傳送食物照片或文字說明。\n中途想取消記錄請輸入「取消」喵",
+                text: "喵喵！開始記錄！\n請傳送食物照片或文字說明。\n中途想取消記錄請輸入「取消」喵\n\n⚠️ 注意：輸入計算後，AI 分析需要等待約 10 秒鐘，請耐心等候結果，不要重複輸入喔！",
             });
         }
         if (text === "運動記錄") {
-            userSessions[userId] = { mode: "exercise", content: "" }; // ✨ 標記為 exercise 模式
+            userSessions[userId] = { mode: "exercise", content: "" }; // 標記為 exercise 模式
 
-            // 設定 5 分鐘後自動清除 (運動通常打字很快，不用太久)
+            // 設定 5 分鐘後自動清除
             setTimeout(() => {
                 if (userSessions[userId]) delete userSessions[userId];
             }, 5 * 60 * 1000);
 
             return lineClient.replyMessage(replyToken, {
                 type: "text",
-                text: "你好！請輸入運動內容喵！中途想取消記錄請輸入「取消」喵",
+                text: "你好！請輸入運動內容喵！中途想取消記錄請輸入「取消」喵\n\n⚠️ 注意：輸入計算後，AI 分析需要等待約 10 秒鐘，請耐心等候結果，不要重複輸入喔！",
             });
         }
     }
 
-    // 🔒 門神檢查
+    // 門神檢查
     if (!userSessions[userId]) return Promise.resolve(null);
 
     const session = userSessions[userId];
 
+    // -----------------------------------------------------------
+    // 分流處理：如果是「運動模式」
+    // -----------------------------------------------------------
     if (
         session.mode === "exercise" &&
         event.type === "message" &&
@@ -91,42 +94,37 @@ async function handleEvent(event) {
             });
         }
 
-        // 開始寫入 Notion
-        await lineClient.replyMessage(replyToken, {
-            type: "text",
-            text: "喵喵！正在記錄運動中...",
-        });
-
         try {
-            // 取得使用者暱稱
+            // 取得使用者暱稱(加機器人好友才會有userName)
             let userName = "未知使用者";
             try {
                 const profile = await lineClient.getProfile(userId);
                 userName = profile.displayName;
             } catch (e) {}
 
-            // ✨ 呼叫專用的運動存檔函式
             await saveExerciseToNotion(text, userName);
 
             delete userSessions[userId]; // 任務完成，清除狀態
 
-            return lineClient.pushMessage(targetId, {
+            return lineClient.replyMessage(replyToken, {
                 type: "text",
                 text: `✅ 運動紀錄完成！\n\n👤 紀錄者：${userName}\n🏃 項目：${text}\n\n繼續保持喵！💪`,
             });
         } catch (error) {
             console.error(error);
-            return lineClient.pushMessage(targetId, {
+            //  replyMessage 回報錯誤
+            return lineClient.replyMessage(replyToken, {
                 type: "text",
                 text: "哇哇，分析或存檔失敗了 QQ",
             });
         }
     }
 
+    // -----------------------------------------------------------
+    // 分流處理：如果是「飲食模式」
+    // -----------------------------------------------------------
     if (session.mode === "food") {
-        // -----------------------------------------------------------
-        // 🖼️ 情況 A：收到「圖片」
-        // -----------------------------------------------------------
+        // 圖片處理
         if (event.type === "message" && event.message.type === "image") {
             try {
                 const stream = await lineClient.getMessageContent(
@@ -148,79 +146,72 @@ async function handleEvent(event) {
             }
         }
 
-        // -----------------------------------------------------------
-        // 🗣️ 情況 B：收到「文字」
-        // -----------------------------------------------------------
+        // 文字處理
         if (event.type === "message" && event.message.type === "text") {
             const text = event.message.text.trim();
             if (["分析熱量"].includes(text)) return Promise.resolve(null);
-        }
 
-        // --- 結帳指令 ---
-        if (["ok", "OK", "分析", "計算"].includes(text.toLowerCase())) {
-            if (session.images.length === 0 && session.texts.length === 0) {
-                return lineClient.replyMessage(replyToken, {
-                    type: "text",
-                    text: "沒資料喵！請先傳照片或文字。",
-                });
-            }
-
-            await lineClient.replyMessage(replyToken, {
-                type: "text",
-                text: "喵喵收到！計算中並寫入 Notion...",
-            });
-
-            try {
-                // 1. AI 分析
-                const foodData = await analyzeSessionData(
-                    session.images,
-                    session.texts
-                );
-
-                // 2. ✨ 取得使用者暱稱 (Display Name)
-                let userName = "未知使用者";
-                try {
-                    // 如果是在群組，要用 getGroupMemberProfile，個人則用 getProfile
-                    // 為了簡化，我們先嘗試直接抓 User Profile
-                    const profile = await lineClient.getProfile(userId);
-                    userName = profile.displayName;
-                } catch (e) {
-                    console.log("無法取得暱稱，可能未加好友:", e.message);
+            // --- 結帳指令 ---
+            if (["ok", "OK", "分析", "計算"].includes(text.toLowerCase())) {
+                if (session.images.length === 0 && session.texts.length === 0) {
+                    return lineClient.replyMessage(replyToken, {
+                        type: "text",
+                        text: "沒資料喵！請先傳照片或文字。",
+                    });
                 }
 
-                // 3. ✨ 寫入 Notion
-                await saveToNotion(foodData, userName);
+                try {
+                    // 1. AI 分析
+                    const foodData = await analyzeSessionData(
+                        session.images,
+                        session.texts
+                    );
 
-                const replyText = `🍽️ 分析完成並已存檔！\n\n👤 紀錄者：${userName}\n🍱 名稱：${foodData.food_name}\n🔥 熱量：${foodData.calories} kcal\n💪 蛋白質：${foodData.protein}g | 脂肪：${foodData.fat}g | 碳水：${foodData.carbs}g\n\n已寫入資料庫喵！`;
+                    // 2. 取得使用者暱稱 (Display Name)
+                    let userName = "未知使用者";
+                    try {
+                        // 為了簡化，我們先嘗試直接抓 User Profile
+                        const profile = await lineClient.getProfile(userId);
+                        userName = profile.displayName;
+                    } catch (e) {
+                        console.log("無法取得暱稱，可能未加好友:", e.message);
+                    }
 
+                    // 3. 寫入 Notion
+                    await saveToNotion(foodData, userName);
+
+                    const replyText = `🍽️ 分析完成並已存檔！\n\n👤 紀錄者：${userName}\n🍱 名稱：${foodData.food_name}\n🔥 熱量：${foodData.calories} kcal\n💪 蛋白質：${foodData.protein}g | 脂肪：${foodData.fat}g | 碳水：${foodData.carbs}g\n\n已寫入資料庫喵！`;
+
+                    delete userSessions[userId];
+
+                    return lineClient.replyMessage(replyToken, {
+                        type: "text",
+                        text: replyText,
+                    });
+                } catch (error) {
+                    console.error("處理失敗", error);
+                    return lineClient.replyMessage(replyToken, {
+                        type: "text",
+                        text: "哇哇，分析或存檔失敗了 QQ",
+                    });
+                }
+            }
+
+            // --- 取消 ---
+            if (["取消", "結束"].includes(text)) {
                 delete userSessions[userId];
-                return lineClient.pushMessage(targetId, {
+                return lineClient.replyMessage(replyToken, {
                     type: "text",
-                    text: replyText,
-                });
-            } catch (error) {
-                console.error("處理失敗", error);
-                return lineClient.pushMessage(targetId, {
-                    type: "text",
-                    text: "哇哇，分析或存檔失敗了 QQ",
+                    text: "取消記錄，我要回去睡覺了喵~",
                 });
             }
-        }
 
-        // --- 取消 ---
-        if (["取消", "結束"].includes(text)) {
-            delete userSessions[userId];
+            session.texts.push(text);
             return lineClient.replyMessage(replyToken, {
                 type: "text",
-                text: "取消記錄，我要回去睡覺了喵~",
+                text: `📝 已記錄文字 (目前：${session.images.length} 圖, ${session.texts.length} 文字)\n還有資料請繼續上傳，若完成請輸入「OK」或「計算」喵`,
             });
         }
-
-        session.texts.push(text);
-        return lineClient.replyMessage(replyToken, {
-            type: "text",
-            text: `📝 已記錄文字 (目前：${session.images.length} 圖, ${session.texts.length} 文字)\n還有資料請繼續上傳，若完成請輸入「OK」或「計算」喵`,
-        });
     }
 
     return Promise.resolve(null);
@@ -276,11 +267,11 @@ async function saveToNotion(data, userName) {
         console.log("Notion 寫入成功！");
     } catch (error) {
         console.error("Notion 寫入失敗:", error);
-        throw error; // 拋出錯誤讓外面知道
+        throw error;
     }
 }
 
-// 🏋️‍♀️ ✨ 運動專用存檔函式 (對應你的新截圖設定)
+// 運動存檔函式
 async function saveExerciseToNotion(content, userName) {
     try {
         const databaseId = process.env.NOTION_EXERCISE_DATABASE_ID;
@@ -304,10 +295,6 @@ async function saveExerciseToNotion(content, userName) {
                 Date: {
                     date: { start: new Date().toISOString() },
                 },
-                // 4. (選用) 筆記欄位
-                // 雖然你截圖有 Note 欄位，但如果你只想存上面三項，這行不寫也沒關係
-                // 如果想標記這是機器人紀錄的，可以把下面註解打開：
-                // Note: { rich_text: [{ text: { content: "LINE 機器人紀錄" } }] }
             },
         });
         console.log("運動紀錄寫入成功！");

@@ -65,7 +65,7 @@ async function handleEvent(event) {
 
             return lineClient.replyMessage(replyToken, {
                 type: "text",
-                text: "你好！請輸入運動內容喵！中途想取消記錄請輸入「取消」喵\n\n⚠️ 注意：輸入計算後，AI 分析需要等待約 10 秒鐘，請耐心等候結果，不要重複輸入喔！",
+                text: "你好！請輸入運動內容喵！中途想取消記錄請輸入「取消」喵\n\n⚠️ 注意：輸入計算後，儲存notion 需要等待時間，請耐心等候結果，不要重複輸入喔！",
             });
         }
     }

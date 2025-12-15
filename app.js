@@ -55,7 +55,7 @@ async function handleEvent(event) {
                 text: "喵喵！開始記錄！\n請傳送食物照片或文字說明。\n中途想取消記錄請輸入「取消」喵",
             });
         }
-        if (text === "運動紀錄") {
+        if (text === "運動記錄") {
             userSessions[userId] = { mode: "exercise", content: "" }; // ✨ 標記為 exercise 模式
 
             // 設定 5 分鐘後自動清除 (運動通常打字很快，不用太久)

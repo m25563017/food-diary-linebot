@@ -11,6 +11,70 @@ app.get("/", (req, res) => {
     res.send("I'm alive! 機器人醒著喵！");
 });
 
+// 清除功能
+// 🧹 ✨ 新增：每日大掃除專用路徑
+app.get("/cleanup", async (req, res) => {
+    try {
+        const daysToKeep = 30; // 設定保留天數
+        const dateThreshold = new Date();
+        dateThreshold.setDate(dateThreshold.getDate() - daysToKeep);
+        const isoDate = dateThreshold.toISOString();
+
+        console.log(`🧹 開始執行大掃除！將刪除 ${isoDate} 之前的資料...`);
+
+        // 1. 清理「飲食資料庫」
+        await deleteOldRecords(process.env.NOTION_DATABASE_ID, isoDate, "飲食");
+
+        // 2. 清理「運動資料庫」
+        if (process.env.NOTION_EXERCISE_DATABASE_ID) {
+            await deleteOldRecords(
+                process.env.NOTION_EXERCISE_DATABASE_ID,
+                isoDate,
+                "運動"
+            );
+        }
+
+        res.send(`大掃除完成！已刪除 ${daysToKeep} 天前的紀錄。`);
+    } catch (error) {
+        console.error("大掃除失敗:", error);
+        res.status(500).send("大掃除發生錯誤");
+    }
+});
+
+// 🧹 這是負責刪除 Notion 資料的工具函式
+async function deleteOldRecords(databaseId, dateThresholdStr, dbName) {
+    let hasMore = true;
+    let nextCursor = undefined;
+    let deletedCount = 0;
+
+    while (hasMore) {
+        // A. 搜尋過期資料
+        const response = await notion.databases.query({
+            database_id: databaseId,
+            start_cursor: nextCursor,
+            filter: {
+                property: "Date",
+                date: {
+                    before: dateThresholdStr,
+                },
+            },
+        });
+
+        // B. 執行刪除 (封存)
+        for (const page of response.results) {
+            await notion.pages.update({
+                page_id: page.id,
+                archived: true, //  刪除
+            });
+            deletedCount++;
+        }
+
+        hasMore = response.has_more;
+        nextCursor = response.next_cursor;
+    }
+    console.log(`✅ [${dbName}] 清理完成，共刪除了 ${deletedCount} 筆資料。`);
+}
+
 const userSessions = {};
 
 const lineConfig = {
@@ -223,11 +287,12 @@ async function analyzeSessionData(images, texts) {
             generationConfig: { responseMimeType: "application/json" },
         });
 
-        let promptText = `你是一位專業健身營養師。請依據圖片視覺估算食物份量與熱量。
-        1. 必須嚴格分析：請仔細辨識盤子大小、食物堆疊高度來估算公克數。
-        2. 隱藏熱量警示：請考慮烹調用油、醬汁(如沙拉醬、肉燥)的熱量。
-        3. 回覆純 JSON: food_name(總結菜名), calories(總熱量), protein, fat, carbs, reasoning(詳細的分析理由，包含估算的公克數)。
-        4. 請用繁體中文。`;
+        let promptText = `你是一位講求「客觀寫實」的營養師。請依據圖片與文字估算。
+        1. 【份量校正】：請謹慎判斷容器大小（如：那是飯碗還是拉麵碗？）。若無比例尺，請預設為「一般一人份量」。勿將液體體積全部算作固體食物熱量。
+        2. 【避免高估】：請依據「視覺可見」的內容估算，不要過度推測看不見的油脂或隱藏糖分，以「保守、不浮誇」貼近真實的數值為主。
+        3. 【簡化回覆】：reasoning 欄位請限制在「100 字以內」的重點備註（例如：湯圓約4顆，含甜湯熱量）。
+        4. 回覆純 JSON: food_name(菜名), calories(整份熱量 Number), protein, fat, carbs, reasoning(String)。
+        5. 請用繁體中文回覆。`;
 
         if (texts.length > 0) promptText += `\n補充說明：${texts.join("、")}`;
 

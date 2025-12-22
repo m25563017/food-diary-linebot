@@ -283,20 +283,18 @@ async function analyzeSessionData(images, texts) {
     try {
         const model = genAI.getGenerativeModel({
             model: "gemini-2.5-flash",
-            // 強制回應 JSON 格式
             generationConfig: { responseMimeType: "application/json" },
         });
 
         let promptText = `你是一位講求「客觀寫實」的營養師。請依據圖片與文字估算。
-        1. 【份量校正】：請謹慎判斷容器大小（如：那是飯碗還是拉麵碗？）。若無比例尺，請預設為「一般一人份量」。勿將液體體積全部算作固體食物熱量。
-        2. 【避免高估】：請依據「視覺可見」的內容估算，不要過度推測看不見的油脂或隱藏糖分，以「保守、不浮誇」貼近真實的數值為主。
-        3. 【簡化回覆】：reasoning 欄位請限制在「100 字以內」的重點備註（例如：湯圓約4顆，含甜湯熱量）。
+        1. 【份量校正】：請謹慎判斷容器大小。若無比例尺，請預設為「一般一人份量」。勿將液體體積全部算作固體食物熱量。
+        2. 【避免高估】：請依據「視覺可見」的內容估算，以「保守、不浮誇」的數值為主。
+        3. 【簡化回覆】：reasoning 欄位請限制在「100 字以內」的重點備註。
         4. 回覆純 JSON: food_name(菜名), calories(整份熱量 Number), protein, fat, carbs, reasoning(String)。
         5. 請用繁體中文回覆。`;
 
         if (texts.length > 0) promptText += `\n補充說明：${texts.join("、")}`;
 
-        // 準備圖片資料 (Gemini 格式)
         const imageParts = images.map((base64) => ({
             inlineData: {
                 data: base64,
@@ -304,10 +302,16 @@ async function analyzeSessionData(images, texts) {
             },
         }));
 
-        // 發送請求
         const result = await model.generateContent([promptText, ...imageParts]);
         const response = await result.response;
-        const text = response.text();
+        let text = response.text();
+
+        text = text
+            .replace(/```json/g, "")
+            .replace(/```/g, "")
+            .trim();
+
+        console.log("Gemini 回傳的原始文字:", text);
 
         return JSON.parse(text);
     } catch (error) {

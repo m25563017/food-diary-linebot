@@ -218,7 +218,7 @@ async function handleEvent(event) {
 async function analyzeSessionData(images, texts) {
     try {
         const model = genAI.getGenerativeModel({
-            model: "gemini-1.5-flash",
+            model: "gemini-1.5-flash-latest",
             // 強制回應 JSON 格式
             generationConfig: { responseMimeType: "application/json" },
         });

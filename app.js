@@ -1,12 +1,12 @@
 require("dotenv").config();
 const express = require("express");
 const line = require("@line/bot-sdk");
-const OpenAI = require("openai");
 const { Client } = require("@notionhq/client");
+const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 const app = express();
 
-// ✨ 這是喚醒服務專用的「門鈴」
+//喚醒服務
 app.get("/", (req, res) => {
     res.send("I'm alive! 機器人醒著喵！");
 });
@@ -19,26 +19,31 @@ const lineConfig = {
 };
 const lineClient = new line.Client(lineConfig);
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+// 初始化 Gemini
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-// 初始化 Notion Client
+// 初始化 Notion
 const notion = new Client({ auth: process.env.NOTION_API_KEY });
 
+// -------------------------------------------------------------------------
+// 🚀 關鍵修改區：Webhook 改成「先回應，後處理」
+// -------------------------------------------------------------------------
 app.post("/webhook", line.middleware(lineConfig), (req, res) => {
-    Promise.all(req.body.events.map(handleEvent))
-        .then((result) => res.json(result))
-        .catch((err) => {
-            console.error(err);
-            res.status(500).end();
-        });
+    // 收到訊號，馬上回傳 200 OK 給 LINE，避免超時被斷線
+    res.status(200).end();
+    req.body.events.forEach(async (event) => {
+        try {
+            await handleEvent(event);
+        } catch (err) {
+            console.error("事件處理發生錯誤:", err);
+        }
+    });
 });
+// -------------------------------------------------------------------------
 
 async function handleEvent(event) {
     const userId = event.source.userId;
     const replyToken = event.replyToken;
-    const targetId =
-        event.source.groupId || event.source.roomId || event.source.userId;
-
     // -----------------------------------------------------------
     // 監聽「啟動指令」
     // -----------------------------------------------------------
@@ -52,20 +57,19 @@ async function handleEvent(event) {
 
             return lineClient.replyMessage(replyToken, {
                 type: "text",
-                text: "喵喵！開始記錄！\n請傳送食物照片或文字說明。\n中途想取消記錄請輸入「取消」喵\n\n⚠️ 注意：輸入計算後，AI 分析需要等待約 10 秒鐘，請耐心等候結果，不要重複輸入喔！",
+                text: "喵喵！開始記錄！\n請傳送食物照片或文字說明。\n中途想取消記錄請輸入「取消」喵\n\n⚠️ 注意：輸入計算後，AI 分析需要等待約 5~10 秒，請耐心等候結果，不要重複輸入喔！",
             });
         }
-        if (text === "運動記錄") {
-            userSessions[userId] = { mode: "exercise", content: "" }; // 標記為 exercise 模式
+        if (text === "運動記錄" || text === "運動紀錄") {
+            userSessions[userId] = { mode: "exercise", content: "" };
 
-            // 設定 5 分鐘後自動清除
             setTimeout(() => {
                 if (userSessions[userId]) delete userSessions[userId];
             }, 5 * 60 * 1000);
 
             return lineClient.replyMessage(replyToken, {
                 type: "text",
-                text: "你好！請輸入運動內容喵！中途想取消記錄請輸入「取消」喵\n\n⚠️ 注意：輸入計算後，儲存notion 需要等待時間，請耐心等候結果，不要重複輸入喔！",
+                text: "你好！請輸入運動內容喵！中途想取消記錄請輸入「取消」喵",
             });
         }
     }
@@ -85,7 +89,6 @@ async function handleEvent(event) {
     ) {
         const text = event.message.text.trim();
 
-        // 如果使用者想取消
         if (["取消", "結束"].includes(text)) {
             delete userSessions[userId];
             return lineClient.replyMessage(replyToken, {
@@ -95,7 +98,6 @@ async function handleEvent(event) {
         }
 
         try {
-            // 取得使用者暱稱(加機器人好友才會有userName)
             let userName = "未知使用者";
             try {
                 const profile = await lineClient.getProfile(userId);
@@ -104,7 +106,7 @@ async function handleEvent(event) {
 
             await saveExerciseToNotion(text, userName);
 
-            delete userSessions[userId]; // 任務完成，清除狀態
+            delete userSessions[userId];
 
             return lineClient.replyMessage(replyToken, {
                 type: "text",
@@ -112,7 +114,6 @@ async function handleEvent(event) {
             });
         } catch (error) {
             console.error(error);
-            //  replyMessage 回報錯誤
             return lineClient.replyMessage(replyToken, {
                 type: "text",
                 text: "哇哇，分析或存檔失敗了 QQ",
@@ -131,7 +132,7 @@ async function handleEvent(event) {
                     event.message.id
                 );
                 const imageBuffer = await streamToBuffer(stream);
-                session.images.push(imageBuffer.toString("base64")); // 存 base64
+                session.images.push(imageBuffer.toString("base64"));
 
                 return lineClient.replyMessage(replyToken, {
                     type: "text",
@@ -161,23 +162,19 @@ async function handleEvent(event) {
                 }
 
                 try {
-                    // 1. AI 分析
                     const foodData = await analyzeSessionData(
                         session.images,
                         session.texts
                     );
 
-                    // 2. 取得使用者暱稱 (Display Name)
                     let userName = "未知使用者";
                     try {
-                        // 為了簡化，我們先嘗試直接抓 User Profile
                         const profile = await lineClient.getProfile(userId);
                         userName = profile.displayName;
                     } catch (e) {
-                        console.log("無法取得暱稱，可能未加好友:", e.message);
+                        console.log("無法取得暱稱:", e.message);
                     }
 
-                    // 3. 寫入 Notion
                     await saveToNotion(foodData, userName);
 
                     const replyText = `🍽️ 分析完成並已存檔！\n\n👤 紀錄者：${userName}\n🍱 名稱：${foodData.food_name}\n🔥 熱量：${foodData.calories} kcal\n💪 蛋白質：${foodData.protein}g | 脂肪：${foodData.fat}g | 碳水：${foodData.carbs}g\n\n已寫入資料庫喵！`;
@@ -217,29 +214,41 @@ async function handleEvent(event) {
     return Promise.resolve(null);
 }
 
-// 🧠 AI 分析函式
+// AI 分析
 async function analyzeSessionData(images, texts) {
-    let systemContent = `你是一位專業營養師。請依據圖片與文字估算熱量。
-    1. 回覆純 JSON: food_name(String), calories(Number), protein(Number), fat(Number), carbs(Number), reasoning(String)。
-    2. 若有多張圖，請加總。數值請給數字，不要帶單位。
-    3. 請用繁體中文回覆。`;
-
-    if (texts.length > 0) systemContent += `\n補充說明：${texts.join("、")}`;
-
-    const userMessageContent = [{ type: "text", text: systemContent }];
-    images.forEach((base64) => {
-        userMessageContent.push({
-            type: "image_url",
-            image_url: { url: `data:image/jpeg;base64,${base64}` },
+    try {
+        const model = genAI.getGenerativeModel({
+            model: "gemini-1.5-flash",
+            // 強制回應 JSON 格式
+            generationConfig: { responseMimeType: "application/json" },
         });
-    });
 
-    const chatCompletion = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: [{ role: "user", content: userMessageContent }],
-        response_format: { type: "json_object" },
-    });
-    return JSON.parse(chatCompletion.choices[0].message.content);
+        let promptText = `你是一位專業健身營養師。請依據圖片視覺估算食物份量與熱量。
+        1. 必須嚴格分析：請仔細辨識盤子大小、食物堆疊高度來估算公克數。
+        2. 隱藏熱量警示：請考慮烹調用油、醬汁(如沙拉醬、肉燥)的熱量。
+        3. 回覆純 JSON: food_name(總結菜名), calories(總熱量), protein, fat, carbs, reasoning(詳細的分析理由，包含估算的公克數)。
+        4. 請用繁體中文。`;
+
+        if (texts.length > 0) promptText += `\n補充說明：${texts.join("、")}`;
+
+        // 準備圖片資料 (Gemini 格式)
+        const imageParts = images.map((base64) => ({
+            inlineData: {
+                data: base64,
+                mimeType: "image/jpeg",
+            },
+        }));
+
+        // 發送請求
+        const result = await model.generateContent([promptText, ...imageParts]);
+        const response = await result.response;
+        const text = response.text();
+
+        return JSON.parse(text);
+    } catch (error) {
+        console.error("Gemini 分析失敗:", error);
+        throw error;
+    }
 }
 
 // Notion 存檔函式
@@ -257,7 +266,7 @@ async function saveToNotion(data, userName) {
                 Protein: { number: data.protein || 0 },
                 Fat: { number: data.fat || 0 },
                 Carbs: { number: data.carbs || 0 },
-                User: { rich_text: [{ text: { content: userName } }] }, // 記錄是誰吃的
+                User: { rich_text: [{ text: { content: userName } }] },
                 Note: {
                     rich_text: [{ text: { content: data.reasoning || "" } }],
                 },
@@ -275,26 +284,14 @@ async function saveToNotion(data, userName) {
 async function saveExerciseToNotion(content, userName) {
     try {
         const databaseId = process.env.NOTION_EXERCISE_DATABASE_ID;
-
-        if (!databaseId) {
-            throw new Error("找不到運動資料庫 ID，請檢查 .env 設定！");
-        }
+        if (!databaseId) throw new Error("找不到運動資料庫 ID");
 
         await notion.pages.create({
             parent: { database_id: databaseId },
             properties: {
-                // 1. 運動內容
-                Name: {
-                    title: [{ text: { content: content } }],
-                },
-                // 2. 紀錄者
-                User: {
-                    rich_text: [{ text: { content: userName } }],
-                },
-                // 3. 日期
-                Date: {
-                    date: { start: new Date().toISOString() },
-                },
+                Name: { title: [{ text: { content: content } }] },
+                User: { rich_text: [{ text: { content: userName } }] },
+                Date: { date: { start: new Date().toISOString() } },
             },
         });
         console.log("運動紀錄寫入成功！");
@@ -303,6 +300,7 @@ async function saveExerciseToNotion(content, userName) {
         throw error;
     }
 }
+
 function streamToBuffer(stream) {
     return new Promise((resolve, reject) => {
         const chunks = [];

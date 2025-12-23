@@ -184,7 +184,7 @@ async function handleEvent(event) {
             delete userSessions[userId];
             return lineClient.replyMessage(replyToken, {
                 type: "text",
-                text: "已取消。",
+                text: "已取消，我要回去睡覺了喵！",
             });
         }
 
@@ -268,7 +268,7 @@ async function handleEvent(event) {
             session.texts.push(text);
             return lineClient.replyMessage(replyToken, {
                 type: "text",
-                text: "📝 文字已記錄！\n目前 ${session.images.length} 張圖與 ${session.texts.length} 筆文字。",
+                text: `📝 文字已記錄！\n目前 ${session.images.length} 張圖與 ${session.texts.length} 筆文字。`,
             });
         }
     }

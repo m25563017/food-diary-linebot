@@ -154,7 +154,7 @@ async function handleEvent(event) {
             }, 5 * 60 * 1000);
             return lineClient.replyMessage(replyToken, {
                 type: "text",
-                text: "喵喵！開始記錄！\n請傳送食物照片或文字說明。\n結束請輸入「計算」喵",
+                text: "喵喵！開始記錄！\n請傳送食物照片或文字說明。\n結束請輸入「Ok」或「計算」喵",
             });
         }
 
@@ -210,7 +210,7 @@ async function handleEvent(event) {
             session.images.push(imageBuffer.toString("base64"));
             return lineClient.replyMessage(replyToken, {
                 type: "text",
-                text: `📸 收到了！目前 ${session.images.length} 張圖。`,
+                text: `📸 收到了！目前 ${session.images.length} 張圖與 ${session.texts.length} 筆文字。`,
             });
         }
 
@@ -241,7 +241,13 @@ async function handleEvent(event) {
                     const cals = foodData.calories || 0;
                     return lineClient.replyMessage(replyToken, {
                         type: "text",
-                        text: `🍽️ 分析完成！\n👤 ${userName}\n🍱 ${foodData.food_name}\n🔥 ${cals} kcal\n備註：${foodData.reasoning}`,
+                        text: `🍽️ 分析完成！\n👤 ${userName}\n🍱 ${
+                            foodData.food_name
+                        }\n🔥 ${cals} kcal\n🥚 蛋白質：${
+                            foodData.protein || 0
+                        }g\n🥔 碳水：${foodData.carbs || 0}g\n🥓 脂肪：${
+                            foodData.fat || 0
+                        }g\n\n已寫入資料庫喵！`,
                     });
                 } catch (error) {
                     return lineClient.replyMessage(replyToken, {
@@ -262,7 +268,7 @@ async function handleEvent(event) {
             session.texts.push(text);
             return lineClient.replyMessage(replyToken, {
                 type: "text",
-                text: "📝 文字已記錄！",
+                text: "📝 文字已記錄！\n目前 ${session.images.length} 張圖與 ${session.texts.length} 筆文字。",
             });
         }
     }

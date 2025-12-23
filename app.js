@@ -297,6 +297,8 @@ async function analyzeSessionData(images, texts) {
             .replace(/```/g, "")
             .trim();
 
+        console.log("AI 回傳的原始內容:", text);
+
         return JSON.parse(text);
     } catch (error) {
         console.error("Gemini Error:", error);

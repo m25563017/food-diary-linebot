@@ -299,7 +299,33 @@ async function analyzeSessionData(images, texts) {
 
         console.log("AI 回傳的原始內容:", text);
 
-        return JSON.parse(text);
+        let data = JSON.parse(text);
+
+        // 如果 AI 回傳的是陣列
+        if (Array.isArray(data)) {
+            console.log("💡 偵測到多項食物，開始合併計算...");
+
+            // 把陣列變回單一物件
+            const combinedData = {
+                food_name: data.map((item) => item.food_name).join(" + "),
+                calories: data.reduce(
+                    (sum, item) => sum + (item.calories || 0),
+                    0
+                ),
+                protein: data.reduce(
+                    (sum, item) => sum + (item.protein || 0),
+                    0
+                ),
+                fat: data.reduce((sum, item) => sum + (item.fat || 0), 0),
+                carbs: data.reduce((sum, item) => sum + (item.carbs || 0), 0),
+                reasoning: data.map((item) => item.reasoning).join("\n"),
+            };
+            data = combinedData;
+        }
+
+        if (!data.food_name && data.name) data.food_name = data.name;
+
+        return data;
     } catch (error) {
         console.error("Gemini Error:", error);
         return {

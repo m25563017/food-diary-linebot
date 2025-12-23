@@ -311,19 +311,24 @@ async function analyzeSessionData(images, texts) {
         if (Array.isArray(data)) {
             console.log("💡 偵測到多項食物，開始合併計算...");
 
+            // 定義一個小工具：四捨五入到小數點第 1 位
+            const round = (num) => Math.round(num * 10) / 10;
+
             // 把陣列變回單一物件
             const combinedData = {
                 food_name: data.map((item) => item.food_name).join(" + "),
-                calories: data.reduce(
-                    (sum, item) => sum + (item.calories || 0),
-                    0
+                calories: Math.round(
+                    data.reduce((sum, item) => sum + (item.calories || 0), 0)
                 ),
-                protein: data.reduce(
-                    (sum, item) => sum + (item.protein || 0),
-                    0
+                protein: round(
+                    data.reduce((sum, item) => sum + (item.protein || 0), 0)
                 ),
-                fat: data.reduce((sum, item) => sum + (item.fat || 0), 0),
-                carbs: data.reduce((sum, item) => sum + (item.carbs || 0), 0),
+                fat: round(
+                    data.reduce((sum, item) => sum + (item.fat || 0), 0)
+                ),
+                carbs: round(
+                    data.reduce((sum, item) => sum + (item.carbs || 0), 0)
+                ),
                 reasoning: data.map((item) => item.reasoning).join("\n"),
             };
             data = combinedData;

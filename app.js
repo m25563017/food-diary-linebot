@@ -154,7 +154,7 @@ async function handleEvent(event) {
             }, 5 * 60 * 1000);
             return lineClient.replyMessage(replyToken, {
                 type: "text",
-                text: "喵喵！開始記錄！\n請傳送食物照片或文字說明。\n結束請輸入「Ok」或「計算」喵",
+                text: "喵喵！開始記錄！\n請傳送食物照片或文字說明。\n💡 提示：若要補登日期，請在文字說明補上 (如：12/25)\n結束請輸入「Ok」喵",
             });
         }
 
@@ -165,7 +165,7 @@ async function handleEvent(event) {
             }, 5 * 60 * 1000);
             return lineClient.replyMessage(replyToken, {
                 type: "text",
-                text: "請輸入運動內容喵！",
+                text: "請輸入運動內容喵！\n💡 提示：可直接輸入日期 (如：12/20 慢跑 30分鐘)",
             });
         }
     }
@@ -173,7 +173,7 @@ async function handleEvent(event) {
     if (!userSessions[userId]) return Promise.resolve(null);
     const session = userSessions[userId];
 
-    // 運動模式
+    // --- 運動模式 ---
     if (
         session.mode === "exercise" &&
         event.type === "message" &&
@@ -184,7 +184,7 @@ async function handleEvent(event) {
             delete userSessions[userId];
             return lineClient.replyMessage(replyToken, {
                 type: "text",
-                text: "已取消，我要回去睡覺了喵！",
+                text: "已取消！我要回去睡覺了喵！",
             });
         }
 
@@ -194,24 +194,42 @@ async function handleEvent(event) {
             userName = profile.displayName;
         } catch (e) {}
 
-        await saveExerciseToNotion(text, userName);
+        // 解析日期與內容
+        const parsed = parseDateAndContent(text);
+
+        // 存檔
+        await saveExerciseToNotion(parsed.text, userName, parsed.date);
+
         delete userSessions[userId];
+
+        const dateStr = parsed.date.split("T")[0];
         return lineClient.replyMessage(replyToken, {
             type: "text",
-            text: `✅ 運動紀錄完成！(${userName})`,
+            text: `✅ 運動紀錄完成！(${userName})\n📅 日期：${dateStr}\n🏃 項目：${parsed.text}`,
         });
     }
 
-    // 飲食模式
+    // --- 飲食模式  ---
     if (session.mode === "food") {
         if (event.type === "message" && event.message.type === "image") {
             const stream = await lineClient.getMessageContent(event.message.id);
             const imageBuffer = await streamToBuffer(stream);
             session.images.push(imageBuffer.toString("base64"));
-            return lineClient.replyMessage(replyToken, {
-                type: "text",
-                text: `📸 收到了！目前 ${session.images.length} 張圖與 ${session.texts.length} 筆文字。`,
-            });
+
+            if (session.imageReplyTimer) {
+                clearTimeout(session.imageReplyTimer);
+            }
+
+            session.imageReplyTimer = setTimeout(async () => {
+                await lineClient.replyMessage(replyToken, {
+                    type: "text",
+                    text: `📸 收到了！目前 ${session.images.length} 張圖與 ${session.texts.length} 筆文字。\n還有資料請繼續上傳，若完成請輸入「Ok」或「計算」喵`,
+                });
+
+                // 清空計時器
+                delete session.imageReplyTimer;
+            }, 800);
+            return Promise.resolve(null);
         }
 
         if (event.type === "message" && event.message.type === "text") {
@@ -226,22 +244,42 @@ async function handleEvent(event) {
                     });
 
                 try {
+                    let finalDate = new Date().toISOString();
+                    let cleanTexts = [];
+
+                    for (let t of session.texts) {
+                        const parsed = parseDateAndContent(t);
+                        if (parsed.found) {
+                            finalDate = parsed.date;
+                        }
+                        if (parsed.text.length > 0) {
+                            cleanTexts.push(parsed.text);
+                        }
+                    }
+
+                    //  AI 分析 (傳入乾淨的文字，不要把日期也傳給 AI 混淆視聽)
                     const foodData = await analyzeSessionData(
                         session.images,
-                        session.texts
+                        cleanTexts
                     );
+
                     let userName = "未知使用者";
                     try {
                         const profile = await lineClient.getProfile(userId);
                         userName = profile.displayName;
                     } catch (e) {}
 
-                    await saveToNotion(foodData, userName);
+                    // 存檔
+                    await saveToNotion(foodData, userName, finalDate);
+
                     delete userSessions[userId];
+
                     const cals = foodData.calories || 0;
+                    const dateStr = finalDate.split("T")[0];
+
                     return lineClient.replyMessage(replyToken, {
                         type: "text",
-                        text: `🍽️ 分析完成！\n👤 ${userName}\n🍱 ${
+                        text: `🍽️ 分析完成！\n📅 日期：${dateStr}\n👤 ${userName}\n🍱 ${
                             foodData.food_name
                         }\n🔥 ${cals} kcal\n🥚 蛋白質：${
                             foodData.protein || 0
@@ -250,6 +288,7 @@ async function handleEvent(event) {
                         }g\n\n已寫入資料庫喵！`,
                     });
                 } catch (error) {
+                    console.error(error);
                     return lineClient.replyMessage(replyToken, {
                         type: "text",
                         text: "分析失敗了 QQ",
@@ -261,7 +300,7 @@ async function handleEvent(event) {
                 delete userSessions[userId];
                 return lineClient.replyMessage(replyToken, {
                     type: "text",
-                    text: "已取消。",
+                    text: "已取消！我要回去睡覺了喵！",
                 });
             }
 
@@ -348,7 +387,11 @@ async function analyzeSessionData(images, texts) {
 }
 
 // 存檔工具
-async function saveToNotion(data, userName) {
+// 飲食存檔
+async function saveToNotion(data, userName, recordDate) {
+    // 如果沒有傳入日期，就防呆使用當下時間
+    const dateToUse = recordDate || new Date().toISOString();
+
     await notion.pages.create({
         parent: { database_id: process.env.NOTION_DATABASE_ID },
         properties: {
@@ -361,18 +404,21 @@ async function saveToNotion(data, userName) {
             Carbs: { number: data.carbs || 0 },
             User: { rich_text: [{ text: { content: userName } }] },
             Note: { rich_text: [{ text: { content: data.reasoning || "" } }] },
-            Date: { date: { start: new Date().toISOString() } },
+            Date: { date: { start: dateToUse } },
         },
     });
 }
 
-async function saveExerciseToNotion(content, userName) {
+// 運動存檔
+async function saveExerciseToNotion(content, userName, recordDate) {
+    const dateToUse = recordDate || new Date().toISOString();
+
     await notion.pages.create({
         parent: { database_id: process.env.NOTION_EXERCISE_DATABASE_ID },
         properties: {
             Name: { title: [{ text: { content: content } }] },
             User: { rich_text: [{ text: { content: userName } }] },
-            Date: { date: { start: new Date().toISOString() } },
+            Date: { date: { start: dateToUse } },
         },
     });
 }
@@ -384,6 +430,46 @@ function streamToBuffer(stream) {
         stream.on("error", reject);
         stream.on("end", () => resolve(Buffer.concat(chunks)));
     });
+}
+
+// 日期解析小工具
+function parseDateAndContent(text) {
+    // 支援格式：YYYY/MM/DD, YYYY-MM-DD, MM/DD, MM-DD
+    const fullDateRegex = /(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/; // 抓 2025/12/25
+    const shortDateRegex = /(\d{1,2})[-\/](\d{1,2})/; // 抓 12/25
+
+    let targetDate = new Date();
+    let cleanText = text;
+    let found = false;
+
+    // 1. 先找完整日期 (YYYY/MM/DD)
+    const fullMatch = text.match(fullDateRegex);
+    if (fullMatch) {
+        // fullMatch[0] 是抓到的日期字串
+        targetDate = new Date(fullMatch[0]);
+        // 把日期從文字中移除，剩下的就是內容
+        cleanText = text.replace(fullMatch[0], "").trim();
+        found = true;
+    } else {
+        const shortMatch = text.match(shortDateRegex);
+        if (shortMatch) {
+            const currentYear = new Date().getFullYear();
+            const month = shortMatch[1];
+            const day = shortMatch[2];
+            // 組合日期字串
+            targetDate = new Date(`${currentYear}-${month}-${day}`);
+            cleanText = text.replace(shortMatch[0], "").trim();
+            found = true;
+        }
+    }
+
+    targetDate.setHours(12, 0, 0, 0);
+
+    return {
+        date: targetDate.toISOString(), // 轉成 Notion 看得懂的 ISO 格式
+        text: cleanText,
+        found: found,
+    };
 }
 
 const port = process.env.PORT || 3000;

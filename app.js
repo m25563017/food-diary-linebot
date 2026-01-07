@@ -159,13 +159,14 @@ async function handleEvent(event) {
         }
 
         if (text === "運動記錄" || text === "運動紀錄") {
-            userSessions[userId] = { mode: "exercise", content: "" };
+            userSessions[userId] = { mode: "exercise", texts: [] };
+
             setTimeout(() => {
                 if (userSessions[userId]) delete userSessions[userId];
             }, 5 * 60 * 1000);
             return lineClient.replyMessage(replyToken, {
                 type: "text",
-                text: "請輸入運動內容喵！\n💡 提示：可直接輸入日期 (如：12/20 慢跑 30分鐘)",
+                text: "請輸入運動內容喵！\n(可以分多次輸入，最後打「Ok」結算)\n💡 提示：可包含日期 (如：12/20 慢跑)",
             });
         }
     }
@@ -180,6 +181,8 @@ async function handleEvent(event) {
         event.message.type === "text"
     ) {
         const text = event.message.text.trim();
+
+        // 取消指令
         if (["取消", "結束"].includes(text)) {
             delete userSessions[userId];
             return lineClient.replyMessage(replyToken, {
@@ -188,134 +191,154 @@ async function handleEvent(event) {
             });
         }
 
-        let userName = "未知使用者";
-        try {
-            const profile = await lineClient.getProfile(userId);
-            userName = profile.displayName;
-        } catch (e) {}
-        const parsed = parseDateAndContent(text);
+        // 結算
+        if (["ok", "OK", "分析", "計算"].includes(text.toLowerCase())) {
+            if (session.texts.length === 0) {
+                return lineClient.replyMessage(replyToken, {
+                    type: "text",
+                    text: "還沒輸入運動內容喵！請先輸入例如「慢跑 30分鐘」。",
+                });
+            }
 
-        // AI 估算熱量
-        const exerciseData = await analyzeExercise(parsed.text);
+            let userName = "未知使用者";
+            try {
+                const profile = await lineClient.getProfile(userId);
+                userName = profile.displayName;
+            } catch (e) {}
 
-        // 存檔
-        await saveExerciseToNotion(exerciseData, userName, parsed.date);
+            const fullText = session.texts.join(" ");
+            const parsed = parseDateAndContent(fullText);
+            const exerciseData = await analyzeExercise(parsed.text);
+            await saveExerciseToNotion(exerciseData, userName, parsed.date);
+            delete userSessions[userId];
 
-        delete userSessions[userId];
+            const dateStr = parsed.date.split("T")[0];
 
-        const dateStr = parsed.date.split("T")[0];
+            // 回覆結果
+            return lineClient.replyMessage(replyToken, {
+                type: "text",
+                text: `✅ 運動紀錄完成！(${userName})\n📅 日期：${dateStr}\n🏃 項目：${exerciseData.activity_name}\n🔥 消耗：${exerciseData.calories} kcal\n💡 筆記：${exerciseData.reasoning}`,
+            });
+        }
 
-        // 回覆結果
+        // 一般文字：存起來並回覆收到
+        session.texts.push(text);
         return lineClient.replyMessage(replyToken, {
             type: "text",
-            text: `✅ 運動紀錄完成！(${userName})\n📅 日期：${dateStr}\n🏃 項目：${exerciseData.activity_name}\n🔥 消耗：${exerciseData.calories} kcal\n💡 筆記：${exerciseData.reasoning}`,
+            text: `📝 收到！目前已記錄 ${session.texts.length} 筆內容。\n還有嗎？若完成請輸入「Ok」開始計算喵`,
         });
     }
 
-    // --- 飲食模式  ---
-    if (session.mode === "food") {
-        if (event.type === "message" && event.message.type === "image") {
-            const stream = await lineClient.getMessageContent(event.message.id);
-            const imageBuffer = await streamToBuffer(stream);
-            session.images.push(imageBuffer.toString("base64"));
+    // 回覆結果
+    return lineClient.replyMessage(replyToken, {
+        type: "text",
+        text: `✅ 運動紀錄完成！(${userName})\n📅 日期：${dateStr}\n🏃 項目：${exerciseData.activity_name}\n🔥 消耗：${exerciseData.calories} kcal\n💡 筆記：${exerciseData.reasoning}`,
+    });
+}
 
-            if (session.imageReplyTimer) {
-                clearTimeout(session.imageReplyTimer);
-            }
+// --- 飲食模式  ---
+if (session.mode === "food") {
+    if (event.type === "message" && event.message.type === "image") {
+        const stream = await lineClient.getMessageContent(event.message.id);
+        const imageBuffer = await streamToBuffer(stream);
+        session.images.push(imageBuffer.toString("base64"));
 
-            session.imageReplyTimer = setTimeout(async () => {
-                await lineClient.replyMessage(replyToken, {
-                    type: "text",
-                    text: `📸 收到了！目前 ${session.images.length} 張圖與 ${session.texts.length} 筆文字。\n還有資料請繼續上傳，若完成請輸入「Ok」或「計算」喵`,
-                });
-
-                // 清空計時器
-                delete session.imageReplyTimer;
-            }, 800);
-            return Promise.resolve(null);
+        if (session.imageReplyTimer) {
+            clearTimeout(session.imageReplyTimer);
         }
 
-        if (event.type === "message" && event.message.type === "text") {
-            const text = event.message.text.trim();
-            if (["分析熱量"].includes(text)) return Promise.resolve(null);
+        session.imageReplyTimer = setTimeout(async () => {
+            await lineClient.replyMessage(replyToken, {
+                type: "text",
+                text: `📸 收到了！目前 ${session.images.length} 張圖與 ${session.texts.length} 筆文字。\n還有資料請繼續上傳，若完成請輸入「Ok」或「計算」喵`,
+            });
 
-            if (["ok", "OK", "分析", "計算"].includes(text.toLowerCase())) {
-                if (session.images.length === 0 && session.texts.length === 0)
-                    return lineClient.replyMessage(replyToken, {
-                        type: "text",
-                        text: "沒資料喵！",
-                    });
+            // 清空計時器
+            delete session.imageReplyTimer;
+        }, 800);
+        return Promise.resolve(null);
+    }
 
-                try {
-                    let finalDate = new Date().toISOString();
-                    let cleanTexts = [];
+    if (event.type === "message" && event.message.type === "text") {
+        const text = event.message.text.trim();
+        if (["分析熱量"].includes(text)) return Promise.resolve(null);
 
-                    for (let t of session.texts) {
-                        const parsed = parseDateAndContent(t);
-                        if (parsed.found) {
-                            finalDate = parsed.date;
-                        }
-                        if (parsed.text.length > 0) {
-                            cleanTexts.push(parsed.text);
-                        }
-                    }
-
-                    //  AI 分析 (傳入乾淨的文字，不要把日期也傳給 AI 混淆視聽)
-                    const foodData = await analyzeSessionData(
-                        session.images,
-                        cleanTexts
-                    );
-
-                    let userName = "未知使用者";
-                    try {
-                        const profile = await lineClient.getProfile(userId);
-                        userName = profile.displayName;
-                    } catch (e) {}
-
-                    // 存檔
-                    await saveToNotion(foodData, userName, finalDate);
-
-                    delete userSessions[userId];
-
-                    const cals = foodData.calories || 0;
-                    const dateStr = finalDate.split("T")[0];
-
-                    return lineClient.replyMessage(replyToken, {
-                        type: "text",
-                        text: `🍽️ 分析完成！\n📅 日期：${dateStr}\n👤 ${userName}\n🍱 ${
-                            foodData.food_name
-                        }\n🔥 ${cals} kcal\n🥚 蛋白質：${
-                            foodData.protein || 0
-                        }g\n🥔 碳水：${foodData.carbs || 0}g\n🥓 脂肪：${
-                            foodData.fat || 0
-                        }g\n\n已寫入資料庫喵！`,
-                    });
-                } catch (error) {
-                    console.error(error);
-                    return lineClient.replyMessage(replyToken, {
-                        type: "text",
-                        text: "分析失敗了 QQ",
-                    });
-                }
-            }
-
-            if (["取消", "結束"].includes(text)) {
-                delete userSessions[userId];
+        if (["ok", "OK", "分析", "計算"].includes(text.toLowerCase())) {
+            if (session.images.length === 0 && session.texts.length === 0)
                 return lineClient.replyMessage(replyToken, {
                     type: "text",
-                    text: "已取消！我要回去睡覺了喵！",
+                    text: "沒資料喵！",
+                });
+
+            try {
+                let finalDate = new Date().toISOString();
+                let cleanTexts = [];
+
+                for (let t of session.texts) {
+                    const parsed = parseDateAndContent(t);
+                    if (parsed.found) {
+                        finalDate = parsed.date;
+                    }
+                    if (parsed.text.length > 0) {
+                        cleanTexts.push(parsed.text);
+                    }
+                }
+
+                //  AI 分析 (傳入乾淨的文字，不要把日期也傳給 AI 混淆視聽)
+                const foodData = await analyzeSessionData(
+                    session.images,
+                    cleanTexts
+                );
+
+                let userName = "未知使用者";
+                try {
+                    const profile = await lineClient.getProfile(userId);
+                    userName = profile.displayName;
+                } catch (e) {}
+
+                // 存檔
+                await saveToNotion(foodData, userName, finalDate);
+
+                delete userSessions[userId];
+
+                const cals = foodData.calories || 0;
+                const dateStr = finalDate.split("T")[0];
+
+                return lineClient.replyMessage(replyToken, {
+                    type: "text",
+                    text: `🍽️ 分析完成！\n📅 日期：${dateStr}\n👤 ${userName}\n🍱 ${
+                        foodData.food_name
+                    }\n🔥 ${cals} kcal\n🥚 蛋白質：${
+                        foodData.protein || 0
+                    }g\n🥔 碳水：${foodData.carbs || 0}g\n🥓 脂肪：${
+                        foodData.fat || 0
+                    }g\n\n已寫入資料庫喵！`,
+                });
+            } catch (error) {
+                console.error(error);
+                return lineClient.replyMessage(replyToken, {
+                    type: "text",
+                    text: "分析失敗了 QQ",
                 });
             }
+        }
 
-            session.texts.push(text);
+        if (["取消", "結束"].includes(text)) {
+            delete userSessions[userId];
             return lineClient.replyMessage(replyToken, {
                 type: "text",
-                text: `📝 文字已記錄！\n目前 ${session.images.length} 張圖與 ${session.texts.length} 筆文字。`,
+                text: "已取消！我要回去睡覺了喵！",
             });
         }
+
+        session.texts.push(text);
+        return lineClient.replyMessage(replyToken, {
+            type: "text",
+            text: `📝 文字已記錄！\n目前 ${session.images.length} 張圖與 ${session.texts.length} 筆文字。`,
+        });
     }
-    return Promise.resolve(null);
 }
+return Promise.resolve(null);
 
 /**
  * Gemini 分析

@@ -228,12 +228,6 @@ async function handleEvent(event) {
             text: `📝 收到！目前已記錄 ${session.texts.length} 筆內容。\n還有嗎？若完成請輸入「Ok」開始計算喵`,
         });
     }
-
-    // 回覆結果
-    return lineClient.replyMessage(replyToken, {
-        type: "text",
-        text: `✅ 運動紀錄完成！(${userName})\n📅 日期：${dateStr}\n🏃 項目：${exerciseData.activity_name}\n🔥 消耗：${exerciseData.calories} kcal\n💡 筆記：${exerciseData.reasoning}`,
-    });
 }
 
 // --- 飲食模式  ---

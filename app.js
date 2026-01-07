@@ -184,7 +184,7 @@ async function handleEvent(event) {
             delete userSessions[userId];
             return lineClient.replyMessage(replyToken, {
                 type: "text",
-                text: "已取消！我要回去睡覺了喵！",
+                text: "已取消！休息是為了走更長遠的路喵！",
             });
         }
 
@@ -193,19 +193,22 @@ async function handleEvent(event) {
             const profile = await lineClient.getProfile(userId);
             userName = profile.displayName;
         } catch (e) {}
-
-        // 解析日期與內容
         const parsed = parseDateAndContent(text);
 
+        // AI 估算熱量
+        const exerciseData = await analyzeExercise(parsed.text);
+
         // 存檔
-        await saveExerciseToNotion(parsed.text, userName, parsed.date);
+        await saveExerciseToNotion(exerciseData, userName, parsed.date);
 
         delete userSessions[userId];
 
         const dateStr = parsed.date.split("T")[0];
+
+        // 回覆結果
         return lineClient.replyMessage(replyToken, {
             type: "text",
-            text: `✅ 運動紀錄完成！(${userName})\n📅 日期：${dateStr}\n🏃 項目：${parsed.text}`,
+            text: `✅ 運動紀錄完成！(${userName})\n📅 日期：${dateStr}\n🏃 項目：${exerciseData.activity_name}\n🔥 消耗：${exerciseData.calories} kcal\n💡 筆記：${exerciseData.reasoning}`,
         });
     }
 
@@ -386,6 +389,48 @@ async function analyzeSessionData(images, texts) {
     }
 }
 
+/**
+ * 運動熱量估算
+ */
+async function analyzeExercise(text) {
+    try {
+        const model = genAI.getGenerativeModel({
+            model: "gemini-2.5-flash",
+            generationConfig: { responseMimeType: "application/json" },
+        });
+
+        const promptText = `你是一位專業健身教練。
+        請根據使用者的輸入：「${text}」，估算一般成年人的熱量消耗。
+        
+        請回傳純 JSON 格式：
+        {
+            "activity_name": "標準化的運動名稱 (String)",
+            "calories": 消耗熱量數值 (Number, 請給出一個合理的平均估算值),
+            "reasoning": "簡短估算理由 (String, 限 50 字)"
+        }
+        
+        請用繁體中文。`;
+
+        const result = await model.generateContent(promptText);
+        const responseText = result.response
+            .text()
+            .replace(/```json/g, "")
+            .replace(/```/g, "")
+            .trim();
+
+        console.log("🏃 運動分析結果:", responseText);
+        return JSON.parse(responseText);
+    } catch (error) {
+        console.error("運動分析失敗:", error);
+        // 失敗時回傳預設值 (熱量 0)
+        return {
+            activity_name: text,
+            calories: 0,
+            reasoning: "喵喵..算不出來QQ",
+        };
+    }
+}
+
 // 存檔工具
 // 飲食存檔
 async function saveToNotion(data, userName, recordDate) {
@@ -410,19 +455,24 @@ async function saveToNotion(data, userName, recordDate) {
 }
 
 // 運動存檔
-async function saveExerciseToNotion(content, userName, recordDate) {
+async function saveExerciseToNotion(data, userName, recordDate) {
     const dateToUse = recordDate || new Date().toISOString();
 
     await notion.pages.create({
         parent: { database_id: process.env.NOTION_EXERCISE_DATABASE_ID },
         properties: {
-            Name: { title: [{ text: { content: content } }] },
+            Name: {
+                title: [
+                    { text: { content: data.activity_name || "未知運動" } },
+                ],
+            },
+            Calories: { number: data.calories || 0 },
             User: { rich_text: [{ text: { content: userName } }] },
             Date: { date: { start: dateToUse } },
+            Note: { rich_text: [{ text: { content: data.reasoning || "" } }] },
         },
     });
 }
-
 function streamToBuffer(stream) {
     return new Promise((resolve, reject) => {
         const chunks = [];

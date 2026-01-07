@@ -22,6 +22,8 @@ const notion = new Client({ auth: process.env.NOTION_API_KEY });
 // 初始化 Gemini
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
+const defaultUserStats = "女性，身高 160 公分，體重 60 公斤";
+
 const userSessions = {};
 
 // ==========================================
@@ -166,7 +168,7 @@ async function handleEvent(event) {
             }, 5 * 60 * 1000);
             return lineClient.replyMessage(replyToken, {
                 type: "text",
-                text: "請輸入運動內容喵！\n(可以分多次輸入，最後打「Ok」結算)\n💡 提示：可包含日期 (如：12/20 慢跑)",
+                text: "請輸入運動內容喵！\n💡 提示：可包含日期 (如：12/20 慢跑)",
             });
         }
     }
@@ -200,15 +202,17 @@ async function handleEvent(event) {
                 });
             }
 
+            // 抓取使用者名稱
             let userName = "未知使用者";
             try {
                 const profile = await lineClient.getProfile(userId);
                 userName = profile.displayName;
             } catch (e) {}
 
-            const fullText = session.texts.join(" ");
-            const parsed = parseDateAndContent(fullText);
-            const exerciseData = await analyzeExercise(parsed.text);
+            const userStats = defaultUserStats;
+            const fullText = session.texts.join(" "); // 把分段輸入的文字接起來
+            const parsed = parseDateAndContent(fullText); // 解析日期與內容
+            const exerciseData = await analyzeExercise(parsed.text, userStats);
             await saveExerciseToNotion(exerciseData, userName, parsed.date);
             delete userSessions[userId];
 
@@ -225,7 +229,7 @@ async function handleEvent(event) {
         session.texts.push(text);
         return lineClient.replyMessage(replyToken, {
             type: "text",
-            text: `📝 收到！目前已記錄 ${session.texts.length} 筆內容。\n還有嗎？若完成請輸入「Ok」開始計算喵`,
+            text: `📝 收到！目前已記錄 ${session.texts.length} 筆內容。\n完成請輸入「Ok」開始計算喵`,
         });
     }
 
@@ -409,21 +413,24 @@ async function analyzeSessionData(images, texts) {
 /**
  * 運動熱量估算
  */
-async function analyzeExercise(text) {
+async function analyzeExercise(text, userStats) {
     try {
         const model = genAI.getGenerativeModel({
             model: "gemini-2.5-flash",
             generationConfig: { responseMimeType: "application/json" },
         });
 
+        const currentUserStats = userStats || "一般成年人 (體重約 65 公斤)";
+
         const promptText = `你是一位專業健身教練。
-        請根據使用者的輸入：「${text}」，估算一般成年人的熱量消耗。
+        請根據使用者的身體數據：【${currentUserStats}】。
+        以及運動內容：「${text}」，估算該使用者的熱量消耗。
         
         請回傳純 JSON 格式：
         {
             "activity_name": "標準化的運動名稱 (String)",
-            "calories": 消耗熱量數值 (Number, 請給出一個合理的平均估算值),
-            "reasoning": "簡短估算理由 (String, 限 50 字)"
+            "calories": 消耗熱量數值 (Number, 請依據體重做精確估算),
+            "reasoning": "簡短估算理由 (String, 需提到是依據該體重計算, 限 50 字)"
         }
         
         請用繁體中文。`;
@@ -439,11 +446,10 @@ async function analyzeExercise(text) {
         return JSON.parse(responseText);
     } catch (error) {
         console.error("運動分析失敗:", error);
-        // 失敗時回傳預設值 (熱量 0)
         return {
             activity_name: text,
             calories: 0,
-            reasoning: "喵喵..算不出來QQ",
+            reasoning: "無法估算熱量",
         };
     }
 }

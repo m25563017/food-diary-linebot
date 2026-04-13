@@ -51,7 +51,7 @@ app.get("/cleanup", async (req, res) => {
             await deleteOldRecords(
                 process.env.NOTION_EXERCISE_DATABASE_ID,
                 isoDate,
-                "運動"
+                "運動",
             );
         }
 
@@ -97,11 +97,11 @@ async function deleteOldRecords(databaseId, dateThresholdStr, dbName) {
         if (dbInfo.data_sources && dbInfo.data_sources.length > 0) {
             dataSourceId = dbInfo.data_sources[0].id;
             console.log(
-                `✅ [${dbName}] ID 轉換成功！使用 Data Source ID: ${dataSourceId}`
+                `✅ [${dbName}] ID 轉換成功！使用 Data Source ID: ${dataSourceId}`,
             );
         } else {
             console.log(
-                `⚠️ [${dbName}] 找不到 data_sources，嘗試使用原 ID (可能失敗)...`
+                `⚠️ [${dbName}] 找不到 data_sources，嘗試使用原 ID (可能失敗)...`,
             );
         }
     } catch (e) {
@@ -151,9 +151,12 @@ async function handleEvent(event) {
 
         if (["分析熱量", "開始記錄"].includes(text)) {
             userSessions[userId] = { mode: "food", images: [], texts: [] };
-            setTimeout(() => {
-                if (userSessions[userId]) delete userSessions[userId];
-            }, 5 * 60 * 1000);
+            setTimeout(
+                () => {
+                    if (userSessions[userId]) delete userSessions[userId];
+                },
+                5 * 60 * 1000,
+            );
             return lineClient.replyMessage(replyToken, {
                 type: "text",
                 text: "喵喵！開始記錄！\n請傳送食物照片或文字說明。\n💡 提示：若要補登日期，請在文字說明補上 (如：12/25)\n結束請輸入「Ok」喵",
@@ -163,9 +166,12 @@ async function handleEvent(event) {
         if (text === "運動記錄" || text === "運動紀錄") {
             userSessions[userId] = { mode: "exercise", texts: [] };
 
-            setTimeout(() => {
-                if (userSessions[userId]) delete userSessions[userId];
-            }, 5 * 60 * 1000);
+            setTimeout(
+                () => {
+                    if (userSessions[userId]) delete userSessions[userId];
+                },
+                5 * 60 * 1000,
+            );
             return lineClient.replyMessage(replyToken, {
                 type: "text",
                 text: "請輸入運動內容喵！\n💡 提示：可包含日期 (如：12/20 慢跑)",
@@ -284,7 +290,7 @@ async function handleEvent(event) {
                     //  AI 分析 (傳入乾淨的文字，不要把日期也傳給 AI 混淆視聽)
                     const foodData = await analyzeSessionData(
                         session.images,
-                        cleanTexts
+                        cleanTexts,
                     );
 
                     let userName = "未知使用者";
@@ -344,7 +350,7 @@ async function handleEvent(event) {
 async function analyzeSessionData(images, texts) {
     try {
         const model = genAI.getGenerativeModel({
-            model: "gemini-2.5-flash",
+            model: "gemini-3-flash-preview",
             generationConfig: { responseMimeType: "application/json" },
         });
 
@@ -381,16 +387,16 @@ async function analyzeSessionData(images, texts) {
             const combinedData = {
                 food_name: data.map((item) => item.food_name).join(" + "),
                 calories: Math.round(
-                    data.reduce((sum, item) => sum + (item.calories || 0), 0)
+                    data.reduce((sum, item) => sum + (item.calories || 0), 0),
                 ),
                 protein: round(
-                    data.reduce((sum, item) => sum + (item.protein || 0), 0)
+                    data.reduce((sum, item) => sum + (item.protein || 0), 0),
                 ),
                 fat: round(
-                    data.reduce((sum, item) => sum + (item.fat || 0), 0)
+                    data.reduce((sum, item) => sum + (item.fat || 0), 0),
                 ),
                 carbs: round(
-                    data.reduce((sum, item) => sum + (item.carbs || 0), 0)
+                    data.reduce((sum, item) => sum + (item.carbs || 0), 0),
                 ),
                 reasoning: data.map((item) => item.reasoning).join("\n"),
             };

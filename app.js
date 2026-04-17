@@ -354,11 +354,31 @@ async function analyzeSessionData(images, texts) {
             generationConfig: { responseMimeType: "application/json" },
         });
 
-        let promptText = `你是一位講求「客觀寫實」的營養師。
-        1. 份量校正：若無比例尺，預設為「一般一人份量」。
-        2. 避免高估：以「視覺可見」為主，保守估算。
-        3. 回覆純 JSON: food_name(String), calories(Number), protein(Number), fat(Number), carbs(Number), reasoning(String, 限100字)。
-        4. 請用繁體中文。`;
+        // let promptText = `你是一位講求「客觀寫實」的營養師。
+        // 1. 份量校正：若無比例尺，預設為「一般一人份量」。
+        // 2. 避免高估：以「視覺可見」為主，保守估算。
+        // 3. 回覆純 JSON: food_name(String), calories(Number), protein(Number), fat(Number), carbs(Number), reasoning(String, 限100字)。
+        // 4. 請用繁體中文。`;
+
+        let promptText = `你是一位具備 10 年經驗、講求「精準數據」與「臨床實務」的資深營養師。
+            請依據以下原則進行飲食評估：
+            1. 份量估算邏輯：若圖中無比例尺，依據台灣外食常見份量（如：一碗、一份）為標準，並於 reasoning 註明估計克數。
+            2. 隱性熱量加權：必須考慮「烹飪方式」。若為煎、炒、油炸或勾芡，應自動加計視覺不可見的油脂與調味料熱量（油脂 1g = 9kcal）。
+            3. 結構化評估：
+            - 澱粉類：分析精緻度（白米 vs 全穀）。
+            - 蛋白質：區分低、中、高脂肪肉類（如：五花肉 vs 里肌肉）。
+            - 隱形熱量：計算醬料、裹粉、炒菜油。
+            4. 回覆格式：請嚴格回覆純 JSON 格式，不得包含任何 Markdown 區塊標籤或額外文字。
+            JSON 結構：
+            {
+            "food_name": "食物名稱",
+            "calories": 數字,
+            "protein": 數字,
+            "fat": 數字,
+            "carbs": 數字,
+            "reasoning": "限 100 字，需包含份量估計及烹飪油脂的考量說明。"
+            }
+            語言規範：請使用繁體中文（台灣語境）。`;
 
         if (texts.length > 0) promptText += `\n補充說明：${texts.join("、")}`;
 

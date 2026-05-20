@@ -350,7 +350,7 @@ async function handleEvent(event) {
 async function analyzeSessionData(images, texts) {
     try {
         const model = genAI.getGenerativeModel({
-            model: "gemini-3-flash-preview",
+            model: "gemini-3.5-flash",
             generationConfig: { responseMimeType: "application/json" },
         });
 
@@ -442,7 +442,7 @@ async function analyzeSessionData(images, texts) {
 async function analyzeExercise(text, userStats) {
     try {
         const model = genAI.getGenerativeModel({
-            model: "gemini-2.5-flash",
+            model: "gemini-3.5-flash",
             generationConfig: { responseMimeType: "application/json" },
         });
 

@@ -38,7 +38,7 @@ app.get("/", (req, res) => {
 // 每日大掃除
 app.get("/cleanup", async (req, res) => {
     try {
-        const daysToKeep = 30; // 設定保留天數
+        const daysToKeep = 60; // 設定保留天數
         const dateThreshold = new Date();
         dateThreshold.setDate(dateThreshold.getDate() - daysToKeep);
         const isoDate = dateThreshold.toISOString();
@@ -150,13 +150,7 @@ async function handleEvent(event) {
         const text = event.message.text.trim();
 
         if (["分析熱量", "開始記錄"].includes(text)) {
-            userSessions[userId] = { mode: "food", images: [], texts: [] };
-            setTimeout(
-                () => {
-                    if (userSessions[userId]) delete userSessions[userId];
-                },
-                5 * 60 * 1000,
-            );
+            createSession(userId, { mode: "food", images: [], texts: [] });
             return lineClient.replyMessage(replyToken, {
                 type: "text",
                 text: "喵喵！開始記錄！\n請傳送食物照片或文字說明。\n💡 提示：若要補登日期，請在文字說明補上 (如：12/25)\n結束請輸入「Ok」喵",
@@ -164,14 +158,7 @@ async function handleEvent(event) {
         }
 
         if (text === "運動記錄" || text === "運動紀錄") {
-            userSessions[userId] = { mode: "exercise", texts: [] };
-
-            setTimeout(
-                () => {
-                    if (userSessions[userId]) delete userSessions[userId];
-                },
-                5 * 60 * 1000,
-            );
+            createSession(userId, { mode: "exercise", texts: [] });
             return lineClient.replyMessage(replyToken, {
                 type: "text",
                 text: "請輸入運動內容喵！\n💡 提示：可包含日期 (如：12/20 慢跑)",
@@ -179,7 +166,7 @@ async function handleEvent(event) {
         }
     }
 
-    if (!userSessions[userId]) return Promise.resolve(null);
+    if (!userSessions[userId]) return;
     const session = userSessions[userId];
 
     // --- 運動模式 ---
@@ -200,7 +187,7 @@ async function handleEvent(event) {
         }
 
         // 結算
-        if (["ok", "OK", "分析", "計算"].includes(text.toLowerCase())) {
+        if (["ok", "分析", "計算"].includes(text.toLowerCase())) {
             if (session.texts.length === 0) {
                 return lineClient.replyMessage(replyToken, {
                     type: "text",
@@ -208,27 +195,47 @@ async function handleEvent(event) {
                 });
             }
 
-            // 抓取使用者名稱
-            let userName = "未知使用者";
             try {
-                const profile = await lineClient.getProfile(userId);
-                userName = profile.displayName;
-            } catch (e) {}
+                const userName = await getUserName(userId);
+                const fullText = session.texts.join(" ");
+                const parsed = parseDateAndContent(fullText);
 
-            const userStats = defaultUserStats;
-            const fullText = session.texts.join(" "); // 把分段輸入的文字接起來
-            const parsed = parseDateAndContent(fullText); // 解析日期與內容
-            const exerciseData = await analyzeExercise(parsed.text, userStats);
-            await saveExerciseToNotion(exerciseData, userName, parsed.date);
-            delete userSessions[userId];
+                let exerciseData;
+                try {
+                    exerciseData = await analyzeExercise(
+                        parsed.text,
+                        defaultUserStats,
+                    );
+                } catch (primaryErr) {
+                    if (primaryErr.is503) {
+                        console.log(
+                            "主模型 503，切換至 gemini-3.1-pro-preview 重試...",
+                        );
+                        exerciseData = await analyzeExercise(
+                            parsed.text,
+                            defaultUserStats,
+                            "gemini-3.1-pro-preview",
+                        );
+                    } else {
+                        throw primaryErr;
+                    }
+                }
 
-            const dateStr = parsed.date.split("T")[0];
+                await saveExerciseToNotion(exerciseData, userName, parsed.date);
+                delete userSessions[userId];
 
-            // 回覆結果
-            return lineClient.replyMessage(replyToken, {
-                type: "text",
-                text: `✅ 運動紀錄完成！(${userName})\n📅 日期：${dateStr}\n🏃 項目：${exerciseData.activity_name}\n🔥 消耗：${exerciseData.calories} kcal\n💡 筆記：${exerciseData.reasoning}`,
-            });
+                const dateStr = parsed.date.split("T")[0];
+                return lineClient.replyMessage(replyToken, {
+                    type: "text",
+                    text: `✅ 運動紀錄完成！(${userName})\n📅 日期：${dateStr}\n🏃 項目：${exerciseData.activity_name}\n🔥 消耗：${exerciseData.calories} kcal\n💡 筆記：${exerciseData.reasoning}`,
+                });
+            } catch (error) {
+                console.error(error);
+                return lineClient.replyMessage(replyToken, {
+                    type: "text",
+                    text: "喵喵!分析失敗",
+                });
+            }
         }
 
         // 一般文字：存起來並回覆收到
@@ -253,20 +260,20 @@ async function handleEvent(event) {
             session.imageReplyTimer = setTimeout(async () => {
                 await lineClient.replyMessage(replyToken, {
                     type: "text",
-                    text: `📸 收到了！目前 ${session.images.length} 張圖與 ${session.texts.length} 筆文字。\n還有資料請繼續上傳，若完成請輸入「Ok」或「計算」喵`,
+                    text: `📸 收到了！目前 ${session.images.length} 張圖與 ${session.texts.length} 筆文字。\n還有資料請繼續上傳，若完成請輸入「Ok」喵`,
                 });
 
                 // 清空計時器
                 delete session.imageReplyTimer;
             }, 800);
-            return Promise.resolve(null);
+            return;
         }
 
         if (event.type === "message" && event.message.type === "text") {
             const text = event.message.text.trim();
-            if (["分析熱量"].includes(text)) return Promise.resolve(null);
+            if (text === "分析熱量") return;
 
-            if (["ok", "OK", "分析", "計算"].includes(text.toLowerCase())) {
+            if (["ok", "Ok"].includes(text.toLowerCase())) {
                 if (session.images.length === 0 && session.texts.length === 0)
                     return lineClient.replyMessage(replyToken, {
                         type: "text",
@@ -287,17 +294,26 @@ async function handleEvent(event) {
                         }
                     }
 
-                    //  AI 分析 (傳入乾淨的文字，不要把日期也傳給 AI 混淆視聽)
-                    const foodData = await analyzeSessionData(
-                        session.images,
-                        cleanTexts,
-                    );
-
-                    let userName = "未知使用者";
+                    let foodData;
                     try {
-                        const profile = await lineClient.getProfile(userId);
-                        userName = profile.displayName;
-                    } catch (e) {}
+                        foodData = await analyzeSessionData(
+                            session.images,
+                            cleanTexts,
+                        );
+                    } catch (primaryErr) {
+                        if (primaryErr.is503) {
+                            console.log("主模型 503，切換至 3.1 重試...");
+                            foodData = await analyzeSessionData(
+                                session.images,
+                                cleanTexts,
+                                "gemini-3.1-pro-preview",
+                            );
+                        } else {
+                            throw primaryErr;
+                        }
+                    }
+
+                    const userName = await getUserName(userId);
 
                     // 存檔
                     await saveToNotion(foodData, userName, finalDate);
@@ -321,7 +337,7 @@ async function handleEvent(event) {
                     console.error(error);
                     return lineClient.replyMessage(replyToken, {
                         type: "text",
-                        text: "分析失敗了 QQ",
+                        text: "喵喵!分析失敗",
                     });
                 }
             }
@@ -341,24 +357,22 @@ async function handleEvent(event) {
             });
         }
     }
-    return Promise.resolve(null);
+    return;
 }
 
 /**
  * Gemini 分析
  */
-async function analyzeSessionData(images, texts) {
+async function analyzeSessionData(
+    images,
+    texts,
+    modelName = "gemini-3.5-flash",
+) {
     try {
         const model = genAI.getGenerativeModel({
-            model: "gemini-3.5-flash",
+            model: modelName,
             generationConfig: { responseMimeType: "application/json" },
         });
-
-        // let promptText = `你是一位講求「客觀寫實」的營養師。
-        // 1. 份量校正：若無比例尺，預設為「一般一人份量」。
-        // 2. 避免高估：以「視覺可見」為主，保守估算。
-        // 3. 回覆純 JSON: food_name(String), calories(Number), protein(Number), fat(Number), carbs(Number), reasoning(String, 限100字)。
-        // 4. 請用繁體中文。`;
 
         let promptText = `你是一位具備 10 年經驗、講求「精準數據」與「臨床實務」的資深營養師。
             請依據以下原則進行飲食評估：
@@ -386,15 +400,9 @@ async function analyzeSessionData(images, texts) {
             inlineData: { data: base64, mimeType: "image/jpeg" },
         }));
         const result = await model.generateContent([promptText, ...imageParts]);
-        const text = result.response
-            .text()
-            .replace(/```json/g, "")
-            .replace(/```/g, "")
-            .trim();
-
-        console.log("AI 回傳的原始內容:", text);
-
-        let data = JSON.parse(text);
+        const raw = result.response.text();
+        console.log("AI 回傳的原始內容:", raw);
+        let data = parseGeminiJson(raw);
 
         // 如果 AI 回傳的是陣列
         if (Array.isArray(data)) {
@@ -428,21 +436,26 @@ async function analyzeSessionData(images, texts) {
         return data;
     } catch (error) {
         console.error("Gemini Error:", error);
-        return {
-            food_name: "分析失敗",
-            calories: 0,
-            reasoning: "哇哇，分析失敗了 QQ",
-        };
+        if (error?.status === 503) {
+            const e = new Error("SERVICE_UNAVAILABLE");
+            e.is503 = true;
+            throw e;
+        }
+        throw error;
     }
 }
 
 /**
  * 運動熱量估算
  */
-async function analyzeExercise(text, userStats) {
+async function analyzeExercise(
+    text,
+    userStats,
+    modelName = "gemini-3.5-flash",
+) {
     try {
         const model = genAI.getGenerativeModel({
-            model: "gemini-3.5-flash",
+            model: modelName,
             generationConfig: { responseMimeType: "application/json" },
         });
 
@@ -451,32 +464,28 @@ async function analyzeExercise(text, userStats) {
         const promptText = `你是一位專業健身教練。
         請根據使用者的身體數據：【${currentUserStats}】。
         以及運動內容：「${text}」，估算該使用者的熱量消耗。
-        
+
         請回傳純 JSON 格式：
         {
             "activity_name": "標準化的運動名稱 (String)",
             "calories": 消耗熱量數值 (Number, 請依據體重做精確估算),
             "reasoning": "簡短估算理由 (String, 需提到是依據該體重計算, 限 50 字)"
         }
-        
+
         請用繁體中文。`;
 
         const result = await model.generateContent(promptText);
-        const responseText = result.response
-            .text()
-            .replace(/```json/g, "")
-            .replace(/```/g, "")
-            .trim();
-
-        console.log("🏃 運動分析結果:", responseText);
-        return JSON.parse(responseText);
+        const raw = result.response.text();
+        console.log("🏃 運動分析結果:", raw);
+        return parseGeminiJson(raw);
     } catch (error) {
         console.error("運動分析失敗:", error);
-        return {
-            activity_name: text,
-            calories: 0,
-            reasoning: "無法估算熱量",
-        };
+        if (error?.status === 503) {
+            const e = new Error("SERVICE_UNAVAILABLE");
+            e.is503 = true;
+            throw e;
+        }
+        throw error;
     }
 }
 
@@ -529,6 +538,34 @@ function streamToBuffer(stream) {
         stream.on("error", reject);
         stream.on("end", () => resolve(Buffer.concat(chunks)));
     });
+}
+
+async function getUserName(userId) {
+    try {
+        const profile = await lineClient.getProfile(userId);
+        return profile.displayName;
+    } catch (e) {
+        return "未知使用者";
+    }
+}
+
+function createSession(userId, session) {
+    userSessions[userId] = session;
+    setTimeout(
+        () => {
+            if (userSessions[userId]) delete userSessions[userId];
+        },
+        5 * 60 * 1000,
+    );
+}
+
+function parseGeminiJson(responseText) {
+    return JSON.parse(
+        responseText
+            .replace(/```json/g, "")
+            .replace(/```/g, "")
+            .trim(),
+    );
 }
 
 // 日期解析小工具

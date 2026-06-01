@@ -208,13 +208,11 @@ async function handleEvent(event) {
                     );
                 } catch (primaryErr) {
                     if (primaryErr.is503) {
-                        console.log(
-                            "主模型 503，切換至 gemini-3.1-pro-preview 重試...",
-                        );
+                        console.log("主模型 503，切換至 3 重試...");
                         exerciseData = await analyzeExercise(
                             parsed.text,
                             defaultUserStats,
-                            "gemini-3.1-pro-preview",
+                            "gemini-3-flash-preview",
                         );
                     } else {
                         throw primaryErr;
@@ -231,6 +229,7 @@ async function handleEvent(event) {
                 });
             } catch (error) {
                 console.error(error);
+                delete userSessions[userId];
                 return lineClient.replyMessage(replyToken, {
                     type: "text",
                     text: "喵喵!分析失敗",
@@ -273,7 +272,7 @@ async function handleEvent(event) {
             const text = event.message.text.trim();
             if (text === "分析熱量") return;
 
-            if (["ok", "Ok"].includes(text.toLowerCase())) {
+            if (["ok", "分析", "計算"].includes(text.toLowerCase())) {
                 if (session.images.length === 0 && session.texts.length === 0)
                     return lineClient.replyMessage(replyToken, {
                         type: "text",
@@ -302,11 +301,11 @@ async function handleEvent(event) {
                         );
                     } catch (primaryErr) {
                         if (primaryErr.is503) {
-                            console.log("主模型 503，切換至 3.1 重試...");
+                            console.log("主模型 503，切換至 3 重試...");
                             foodData = await analyzeSessionData(
                                 session.images,
                                 cleanTexts,
-                                "gemini-3.1-pro-preview",
+                                "gemini-3-flash-preview",
                             );
                         } else {
                             throw primaryErr;
@@ -335,6 +334,7 @@ async function handleEvent(event) {
                     });
                 } catch (error) {
                     console.error(error);
+                    delete userSessions[userId];
                     return lineClient.replyMessage(replyToken, {
                         type: "text",
                         text: "喵喵!分析失敗",

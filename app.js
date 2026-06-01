@@ -169,6 +169,8 @@ async function handleEvent(event) {
     if (!userSessions[userId]) return;
     const session = userSessions[userId];
 
+    if (session.processing) return;
+
     // --- 運動模式 ---
     if (
         session.mode === "exercise" &&
@@ -195,6 +197,7 @@ async function handleEvent(event) {
                 });
             }
 
+            session.processing = true;
             try {
                 const userName = await getUserName(userId);
                 const fullText = session.texts.join(" ");
@@ -279,6 +282,7 @@ async function handleEvent(event) {
                         text: "沒資料喵！",
                     });
 
+                session.processing = true;
                 try {
                     let finalDate = new Date().toISOString();
                     let cleanTexts = [];

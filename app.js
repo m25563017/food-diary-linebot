@@ -235,7 +235,9 @@ async function handleEvent(event) {
                 delete userSessions[userId];
                 return lineClient.replyMessage(replyToken, {
                     type: "text",
-                    text: "喵喵!分析失敗",
+                    text: error.is503
+                        ? "喵喵!忙線中請稍後再試:3"
+                        : "喵喵!分析失敗",
                 });
             }
         }
@@ -341,7 +343,9 @@ async function handleEvent(event) {
                     delete userSessions[userId];
                     return lineClient.replyMessage(replyToken, {
                         type: "text",
-                        text: "喵喵!分析失敗",
+                        text: error.is503
+                            ? "喵喵!忙線中請稍後再試"
+                            : "喵喵!分析失敗",
                     });
                 }
             }

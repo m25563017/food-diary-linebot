@@ -344,7 +344,7 @@ async function handleEvent(event) {
                     return lineClient.replyMessage(replyToken, {
                         type: "text",
                         text: error.is503
-                            ? "喵喵!忙線中請稍後再試"
+                            ? "喵喵!忙線中請稍後再試:3"
                             : "喵喵!分析失敗",
                     });
                 }
@@ -410,7 +410,19 @@ async function analyzeSessionData(
         const result = await model.generateContent([promptText, ...imageParts]);
         const raw = result.response.text();
         console.log("AI 回傳的原始內容:", raw);
-        let data = parseGeminiJson(raw);
+        let data;
+        try {
+            data = parseGeminiJson(raw);
+        } catch (parseErr) {
+            console.error("JSON 解析失敗，重新請求一次:", parseErr.message);
+            const retryResult = await model.generateContent([
+                promptText,
+                ...imageParts,
+            ]);
+            const retryRaw = retryResult.response.text();
+            console.log("AI 重試回傳的原始內容:", retryRaw);
+            data = parseGeminiJson(retryRaw);
+        }
 
         // 如果 AI 回傳的是陣列
         if (Array.isArray(data)) {
@@ -485,7 +497,18 @@ async function analyzeExercise(
         const result = await model.generateContent(promptText);
         const raw = result.response.text();
         console.log("🏃 運動分析結果:", raw);
-        return parseGeminiJson(raw);
+        try {
+            return parseGeminiJson(raw);
+        } catch (parseErr) {
+            console.error(
+                "運動分析 JSON 解析失敗，重新請求一次:",
+                parseErr.message,
+            );
+            const retryResult = await model.generateContent(promptText);
+            const retryRaw = retryResult.response.text();
+            console.log("🏃 運動分析重試結果:", retryRaw);
+            return parseGeminiJson(retryRaw);
+        }
     } catch (error) {
         console.error("運動分析失敗:", error);
         if (error?.status === 503) {
@@ -568,12 +591,34 @@ function createSession(userId, session) {
 }
 
 function parseGeminiJson(responseText) {
-    return JSON.parse(
-        responseText
-            .replace(/```json/g, "")
-            .replace(/```/g, "")
-            .trim(),
-    );
+    const cleaned = responseText
+        .replace(/```json/g, "")
+        .replace(/```/g, "")
+        .trim();
+
+    // Gemini 有時會在合法 JSON 後面多吐出文字，裁掉開頭大括號/中括號之外
+    // 以及對應結尾之後的所有內容，只保留第一個完整、括號配對平衡的區塊。
+    const start = cleaned.search(/[{[]/);
+    if (start === -1) return JSON.parse(cleaned);
+
+    const openChar = cleaned[start];
+    const closeChar = openChar === "{" ? "}" : "]";
+    let depth = 0;
+    let end = -1;
+    for (let i = start; i < cleaned.length; i++) {
+        if (cleaned[i] === openChar) depth++;
+        else if (cleaned[i] === closeChar) {
+            depth--;
+            if (depth === 0) {
+                end = i;
+                break;
+            }
+        }
+    }
+
+    const jsonStr =
+        end === -1 ? cleaned.slice(start) : cleaned.slice(start, end + 1);
+    return JSON.parse(jsonStr);
 }
 
 // 日期解析小工具

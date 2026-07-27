@@ -603,11 +603,35 @@ function parseGeminiJson(responseText) {
 
     const openChar = cleaned[start];
     const closeChar = openChar === "{" ? "}" : "]";
+    const jsonStr = extractBalancedJson(cleaned, start, openChar, closeChar);
+
+    try {
+        return JSON.parse(jsonStr);
+    } catch (err) {
+        // Gemini 偶爾會在字串內容（例如 reasoning 自由文字）吐出未跳脫的引號，
+        // 導致字串提前結束、後面內容變成不合法的 token。嘗試自動補上跳脫符號後再解析一次。
+        return JSON.parse(repairUnescapedQuotes(jsonStr));
+    }
+}
+
+/**
+ * 從 start 開始，依括號深度找出第一個完整、配對平衡的 JSON 區塊。
+ * 掃描時會追蹤是否位於字串內，避免字串內容裡剛好出現 {}/[] 字元干擾配對。
+ */
+function extractBalancedJson(text, start, openChar, closeChar) {
     let depth = 0;
+    let inString = false;
     let end = -1;
-    for (let i = start; i < cleaned.length; i++) {
-        if (cleaned[i] === openChar) depth++;
-        else if (cleaned[i] === closeChar) {
+    for (let i = start; i < text.length; i++) {
+        const ch = text[i];
+        if (inString) {
+            if (ch === "\\") i++;
+            else if (ch === '"') inString = false;
+            continue;
+        }
+        if (ch === '"') inString = true;
+        else if (ch === openChar) depth++;
+        else if (ch === closeChar) {
             depth--;
             if (depth === 0) {
                 end = i;
@@ -615,10 +639,50 @@ function parseGeminiJson(responseText) {
             }
         }
     }
+    return end === -1 ? text.slice(start) : text.slice(start, end + 1);
+}
 
-    const jsonStr =
-        end === -1 ? cleaned.slice(start) : cleaned.slice(start, end + 1);
-    return JSON.parse(jsonStr);
+/**
+ * 修補字串內未跳脫的雙引號：逐字掃描字串內容，遇到後面緊接的不是
+ * 逗號/冒號/收尾括號（或結尾）的引號，視為內容裡的引號而非字串結尾，
+ * 自動補上跳脫符號再交給 JSON.parse。
+ */
+function repairUnescapedQuotes(jsonStr) {
+    let result = "";
+    let inString = false;
+    for (let i = 0; i < jsonStr.length; i++) {
+        const ch = jsonStr[i];
+        if (!inString) {
+            result += ch;
+            if (ch === '"') inString = true;
+            continue;
+        }
+        if (ch === "\\") {
+            result += ch + (jsonStr[i + 1] ?? "");
+            i++;
+            continue;
+        }
+        if (ch === '"') {
+            let j = i + 1;
+            while (j < jsonStr.length && /\s/.test(jsonStr[j])) j++;
+            const next = jsonStr[j];
+            const isRealEnd =
+                next === undefined ||
+                next === "," ||
+                next === "}" ||
+                next === "]" ||
+                next === ":";
+            if (isRealEnd) {
+                inString = false;
+                result += ch;
+            } else {
+                result += '\\"';
+            }
+            continue;
+        }
+        result += ch;
+    }
+    return result;
 }
 
 // 日期解析小工具

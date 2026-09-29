@@ -22,6 +22,13 @@ const notion = new Client({ auth: process.env.NOTION_API_KEY });
 // 初始化 Gemini
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
+// 依序嘗試的模型：前一個 503 或網路失敗時換下一個
+const GEMINI_MODELS = [
+    "gemini-3.8-flash",
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
+];
+
 const defaultUserStats = "女性，身高 160 公分，體重 60 公斤";
 
 const userSessions = {};
@@ -203,24 +210,9 @@ async function handleEvent(event) {
                 const fullText = session.texts.join(" ");
                 const parsed = parseDateAndContent(fullText);
 
-                let exerciseData;
-                try {
-                    exerciseData = await analyzeExercise(
-                        parsed.text,
-                        defaultUserStats,
-                    );
-                } catch (primaryErr) {
-                    if (primaryErr.is503) {
-                        console.log("主模型 503，切換至 3 重試...");
-                        exerciseData = await analyzeExercise(
-                            parsed.text,
-                            defaultUserStats,
-                            "gemini-3.7-flash",
-                        );
-                    } else {
-                        throw primaryErr;
-                    }
-                }
+                const exerciseData = await withModelFallback((modelName) =>
+                    analyzeExercise(parsed.text, defaultUserStats, modelName),
+                );
 
                 await saveExerciseToNotion(exerciseData, userName, parsed.date);
                 delete userSessions[userId];
@@ -299,24 +291,13 @@ async function handleEvent(event) {
                         }
                     }
 
-                    let foodData;
-                    try {
-                        foodData = await analyzeSessionData(
+                    const foodData = await withModelFallback((modelName) =>
+                        analyzeSessionData(
                             session.images,
                             cleanTexts,
-                        );
-                    } catch (primaryErr) {
-                        if (primaryErr.is503) {
-                            console.log("主模型 503，切換至 3 重試...");
-                            foodData = await analyzeSessionData(
-                                session.images,
-                                cleanTexts,
-                                "gemini-3.7-flash",
-                            );
-                        } else {
-                            throw primaryErr;
-                        }
-                    }
+                            modelName,
+                        ),
+                    );
 
                     const userName = await getUserName(userId);
 
@@ -646,7 +627,7 @@ function combineFoodItems(data) {
 async function analyzeSessionData(
     images,
     texts,
-    modelName = "gemini-3.8-flash",
+    modelName = GEMINI_MODELS[0],
 ) {
     try {
         const model = genAI.getGenerativeModel({
@@ -696,7 +677,7 @@ async function analyzeSessionData(
 async function analyzeExercise(
     text,
     userStats,
-    modelName = "gemini-3.8-flash",
+    modelName = GEMINI_MODELS[0],
 ) {
     try {
         const model = genAI.getGenerativeModel({
@@ -821,6 +802,24 @@ function createSession(userId, session) {
 function isRetryableGeminiError(error) {
     if (error?.status === 503) return true;
     return error instanceof TypeError && error.message === "fetch failed";
+}
+
+/**
+ * 依 GEMINI_MODELS 順序呼叫 fn(modelName)，遇到 503／網路失敗就換下一個模型
+ */
+async function withModelFallback(fn) {
+    let lastErr;
+    for (const [i, modelName] of GEMINI_MODELS.entries()) {
+        try {
+            return await fn(modelName);
+        } catch (err) {
+            if (!err.is503) throw err;
+            lastErr = err;
+            const next = GEMINI_MODELS[i + 1];
+            if (next) console.log(`${modelName} 暫時無法使用，切換至 ${next} 重試...`);
+        }
+    }
+    throw lastErr;
 }
 
 function parseGeminiJson(responseText) {

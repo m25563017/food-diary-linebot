@@ -804,8 +804,11 @@ function isRetryableGeminiError(error) {
     return error instanceof TypeError && error.message === "fetch failed";
 }
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 /**
- * 依 GEMINI_MODELS 順序呼叫 fn(modelName)，遇到 503／網路失敗就換下一個模型
+ * 依 GEMINI_MODELS 順序呼叫 fn(modelName)，遇到 503／網路失敗就等一下再換下一個模型
+ * 等待時間逐次加長（1 秒、2 秒…），給伺服器喘息的時間
  */
 async function withModelFallback(fn) {
     let lastErr;
@@ -816,7 +819,13 @@ async function withModelFallback(fn) {
             if (!err.is503) throw err;
             lastErr = err;
             const next = GEMINI_MODELS[i + 1];
-            if (next) console.log(`${modelName} 暫時無法使用，切換至 ${next} 重試...`);
+            if (next) {
+                const delayMs = (i + 1) * 1000;
+                console.log(
+                    `${modelName} 暫時無法使用，${delayMs / 1000} 秒後切換至 ${next} 重試...`,
+                );
+                await sleep(delayMs);
+            }
         }
     }
     throw lastErr;

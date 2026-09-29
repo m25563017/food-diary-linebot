@@ -224,12 +224,19 @@ async function handleEvent(event) {
                 });
             } catch (error) {
                 console.error(error);
+                if (error.is503) {
+                    // 保留運動內容，讓使用者稍後直接輸入 Ok 重試
+                    session.processing = false;
+                    resetSessionTimer(userId, session);
+                    return lineClient.replyMessage(replyToken, {
+                        type: "text",
+                        text: "喵喵!忙線中:3\n運動內容還留著，過一下再輸入「Ok」重試就好喵（保留 5 分鐘）",
+                    });
+                }
                 delete userSessions[userId];
                 return lineClient.replyMessage(replyToken, {
                     type: "text",
-                    text: error.is503
-                        ? "喵喵!忙線中請稍後再試:3"
-                        : "喵喵!分析失敗",
+                    text: "喵喵!分析失敗",
                 });
             }
         }
@@ -321,12 +328,19 @@ async function handleEvent(event) {
                     });
                 } catch (error) {
                     console.error(error);
+                    if (error.is503) {
+                        // 保留照片與文字，讓使用者稍後直接輸入 Ok 重試
+                        session.processing = false;
+                        resetSessionTimer(userId, session);
+                        return lineClient.replyMessage(replyToken, {
+                            type: "text",
+                            text: "喵喵!忙線中:3\n照片跟文字都還留著，過一下再輸入「Ok」重試就好喵（保留 5 分鐘）",
+                        });
+                    }
                     delete userSessions[userId];
                     return lineClient.replyMessage(replyToken, {
                         type: "text",
-                        text: error.is503
-                            ? "喵喵!忙線中請稍後再試:3"
-                            : "喵喵!分析失敗",
+                        text: "喵喵!分析失敗",
                     });
                 }
             }
@@ -786,21 +800,35 @@ async function getUserName(userId) {
     }
 }
 
+const SESSION_TTL_MS = 5 * 60 * 1000;
+
 function createSession(userId, session) {
+    const oldSession = userSessions[userId];
+    if (oldSession) clearTimeout(oldSession.expireTimer);
+
     userSessions[userId] = session;
-    setTimeout(
-        () => {
-            if (userSessions[userId]) delete userSessions[userId];
-        },
-        5 * 60 * 1000,
-    );
+    resetSessionTimer(userId, session);
 }
 
 /**
- * 判斷 Gemini 錯誤是否可切換模型重試：503 或網路層失敗（fetch failed）
+ * 重新計算 session 的過期時間（從現在起 SESSION_TTL_MS 後清除）
+ */
+function resetSessionTimer(userId, session) {
+    clearTimeout(session.expireTimer);
+    session.expireTimer = setTimeout(() => {
+        // 只清掉同一個 session，避免誤刪之後新建的 session
+        if (userSessions[userId] === session) delete userSessions[userId];
+    }, SESSION_TTL_MS);
+}
+
+/**
+ * 判斷 Gemini 錯誤是否可切換模型重試：
+ * - 503：模型滿載
+ * - 429：該模型額度用完（免費額度依模型分開計算，換模型通常可用）
+ * - fetch failed：網路層失敗
  */
 function isRetryableGeminiError(error) {
-    if (error?.status === 503) return true;
+    if (error?.status === 503 || error?.status === 429) return true;
     return error instanceof TypeError && error.message === "fetch failed";
 }
 

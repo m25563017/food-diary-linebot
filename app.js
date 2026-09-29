@@ -215,7 +215,7 @@ async function handleEvent(event) {
                         exerciseData = await analyzeExercise(
                             parsed.text,
                             defaultUserStats,
-                            "gemini-3-flash-preview",
+                            "gemini-3.7-flash",
                         );
                     } else {
                         throw primaryErr;
@@ -311,7 +311,7 @@ async function handleEvent(event) {
                             foodData = await analyzeSessionData(
                                 session.images,
                                 cleanTexts,
-                                "gemini-3-flash-preview",
+                                "gemini-3.7-flash",
                             );
                         } else {
                             throw primaryErr;
@@ -374,7 +374,7 @@ async function handleEvent(event) {
 async function analyzeSessionData(
     images,
     texts,
-    modelName = "gemini-3.5-flash",
+    modelName = "gemini-3.8-flash",
 ) {
     try {
         const model = genAI.getGenerativeModel({
@@ -471,7 +471,7 @@ async function analyzeSessionData(
 async function analyzeExercise(
     text,
     userStats,
-    modelName = "gemini-3.5-flash",
+    modelName = "gemini-3.8-flash",
 ) {
     try {
         const model = genAI.getGenerativeModel({

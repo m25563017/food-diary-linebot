@@ -24,9 +24,9 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 // 依序嘗試的模型：前一個 503 或網路失敗時換下一個
 const GEMINI_MODELS = [
-    "gemini-3.8-flash",
     "gemini-3.7-flash",
-    "gemini-3.6-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
 ];
 
 const defaultUserStats = "女性，身高 160 公分，體重 60 公斤";
@@ -650,11 +650,7 @@ function combineFoodItems(data) {
 /**
  * Gemini 分析
  */
-async function analyzeSessionData(
-    images,
-    texts,
-    modelName = GEMINI_MODELS[0],
-) {
+async function analyzeSessionData(images, texts, modelName = GEMINI_MODELS[0]) {
     try {
         const model = genAI.getGenerativeModel({
             model: modelName,
@@ -700,11 +696,7 @@ async function analyzeSessionData(
 /**
  * 運動熱量估算
  */
-async function analyzeExercise(
-    text,
-    userStats,
-    modelName = GEMINI_MODELS[0],
-) {
+async function analyzeExercise(text, userStats, modelName = GEMINI_MODELS[0]) {
     try {
         const model = genAI.getGenerativeModel({
             model: modelName,

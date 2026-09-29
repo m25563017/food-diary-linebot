@@ -369,6 +369,278 @@ async function handleEvent(event) {
 }
 
 /**
+ * 食物營養分析用的 Gemini 提示詞
+ */
+const FOOD_ANALYSIS_PROMPT = `你是一位具備 10 年經驗、講求「精準數據」與「臨床實務」的資深營養師。
+
+你的任務是根據使用者提供的「圖片、文字或圖片＋文字」，估算食物的熱量與三大營養素。
+
+【一、圖片與文字的關係判斷】
+
+使用者提供的圖片與文字可能有以下三種情況，必須先判斷兩者的關係：
+
+1. 補充說明
+如果文字是在描述圖片中的食物、份量、烹調方式、食用程度或特殊處理方式，則圖片與文字屬於「同一份食物」。
+例如：
+- 圖片：一個便當
+- 文字：「白飯只吃一半」
+→ 文字是圖片的補充資訊，應合併判斷。
+
+2. 不同食物
+如果文字描述的是圖片中沒有出現的另一項食物，則圖片與文字代表「不同食物」，不得合併計算。
+例如：
+- 圖片：牛肉麵
+- 文字：「另外還吃了一顆茶葉蛋」
+→ 應分別計算牛肉麵與茶葉蛋。
+
+3. 無法判斷
+如果無法確定文字是在補充圖片，或是在描述另一項食物，應優先依照文字與圖片中的具體資訊判斷。
+不得為了強行合併而假設兩者是同一份食物。
+
+【二、食物拆分規則】
+
+你只負責辨識與估算「單一品項」，不得做任何加總。總和由系統程式計算。
+
+必須將餐點拆分成可分辨的單一食材或菜色，每一項分開估算，不得以整份餐點合併估算。
+
+常見的拆分單位：
+- 白飯、麵、麵包等主食
+- 主菜
+- 每一道配菜
+- 蛋
+- 湯品
+- 飲料
+- 額外加點的食物
+
+例如：
+圖片：雞腿便當
+文字：「另外喝了一杯無糖紅茶」
+→ 分成「白飯」、「滷雞腿」、「炒高麗菜」、「滷蛋」、「無糖紅茶」等實際看得到的品項。
+
+例如：
+圖片：牛肉麵
+→ 分成「麵條」、「牛肉」、「湯頭」。
+
+只有本身無法分開的食物才視為單一品項，例如：三明治、漢堡、水餃、飯糰、珍珠奶茶。
+此時醬料、內餡、配料一律計入該品項內，不需另外拆出。
+
+【三、份量估算邏輯】
+
+若圖片中沒有比例尺，請依據台灣常見外食份量估算。
+
+可參考以下常見份量：
+- 白飯一碗：約 150～200g
+- 便當白飯：約 200～300g
+- 一般麵食：約 200～300g 熟麵
+- 一份肉類：約 80～150g
+- 一顆雞蛋：約 50～60g
+- 一杯飲料：約 350～700ml
+
+以上僅作為估算基準，應依圖片實際大小調整。
+
+不得假裝知道精確重量。
+如果無法確認，使用合理的台灣外食常見份量進行估算，並在 reasoning 中說明估計份量。
+
+【四、烹調方式與隱性熱量】
+
+必須根據食物的烹調方式估算看不見的油脂與調味料。
+
+以下情況需要特別考慮額外油脂：
+- 油炸
+- 煎
+- 炒
+- 烤
+- 酥炸
+- 勾芡
+- 麻辣、紅油類
+- 奶油／起司料理
+- 濃郁醬汁
+
+油脂換算：
+1g 脂肪 = 9 kcal。
+
+如果無法知道實際用油量，請依照台灣外食常見烹調方式估算合理油脂，不得假設完全無油。
+
+例如：
+- 炒青菜：應估算炒菜油
+- 炒飯：應估算炒飯用油
+- 炸雞：應考慮炸油及裹粉吸油
+- 滷肉：應考慮肉本身脂肪與滷汁
+- 義大利麵：應考慮橄欖油、奶油或醬汁
+- 沙拉：若有沙拉醬，必須估算醬料熱量
+
+【五、營養素估算】
+
+請估算：
+- calories：總熱量，單位 kcal
+- protein：蛋白質，單位 g
+- fat：脂肪，單位 g
+- carbs：碳水化合物，單位 g
+
+營養素與熱量應保持基本合理性：
+
+熱量 ≈
+蛋白質 × 4
+＋ 碳水化合物 × 4
+＋ 脂肪 × 9
+
+允許因四捨五入、纖維、糖醇或估算誤差存在合理差異，但不可出現明顯矛盾。
+
+【六、澱粉分析】
+
+判斷澱粉來源與精緻程度。
+
+例如：
+- 白飯 → 精緻穀物
+- 白麵 → 精緻澱粉
+- 糙米 → 全穀
+- 燕麥 → 通常屬較完整穀物
+- 地瓜 → 未精製澱粉來源
+
+如果無法從圖片判斷食材種類，不得自行假設為全穀。
+
+【七、蛋白質分析】
+
+辨識主要蛋白質來源，並估算其脂肪程度。
+
+可區分：
+- 低脂：雞胸、里肌、白肉魚、蝦等
+- 中脂：雞腿、瘦牛肉、豬肉等
+- 高脂：五花肉、培根、香腸、炸肉等
+
+若食物經過油炸或裹粉，即使原本肉類脂肪較低，也必須將額外油脂納入估算。
+
+【八、隱形熱量】
+
+特別注意以下來源：
+- 烹調油
+- 沙拉醬
+- 美乃滋
+- 奶油
+- 起司
+- 糖
+- 蜂蜜
+- 濃縮醬汁
+- 勾芡
+- 炸粉
+- 飲料中的糖
+
+如果圖片無法確認是否有醬料，應依視覺線索判斷，不要無條件加入大量醬料。
+
+【九、估算原則】
+
+這是「估算」，不是醫療檢驗或食品實驗室分析。
+
+如果資訊不足：
+- 使用台灣常見外食份量作為基準。
+- 不要捏造品牌、食材重量或精確烹調油量。
+- 應選擇合理的中間估計值。
+- reasoning 中簡短說明主要估算依據。
+
+如果使用者明確提供份量，例如：
+「白飯150g」
+「雞胸肉100g」
+「只吃半碗」
+則優先使用使用者提供的數據，不要再使用一般份量覆蓋。
+
+【十、輸出格式】
+
+輸出一個物件，包含 meal_name 與 items 兩個欄位。
+
+meal_name：這一餐的簡短名稱，用於紀錄標題，限 20 字。
+- 以一般人會怎麼稱呼這餐來命名，例如「滷雞腿便當、無糖紅茶」、「牛肉麵、茶葉蛋」。
+- 不要逐一列出所有拆分後的品項。
+
+items：拆分後的單一品項陣列。
+- 每個品項輸出一個物件。
+- 即使只有一個品項，仍然輸出陣列。
+- 按照使用者提供的順序輸出。
+
+禁止事項：
+- 不得輸出「總計」、「合計」或任何加總後的物件。
+- 不得在任何欄位中寫出多個品項加總後的數值。
+- 每個物件的數值只能代表該單一品項。
+
+只能輸出純 JSON，不得包含 Markdown、說明文字或 \`\`\`。
+
+JSON 格式：
+
+{
+  "meal_name": "餐點簡短名稱",
+  "items": [
+    {
+      "food_name": "單一品項名稱",
+      "calories": 0,
+      "protein": 0,
+      "fat": 0,
+      "carbs": 0,
+      "confidence": "high",
+      "reasoning": "限40字，說明份量估計及烹調油脂或醬料的考量。"
+    }
+  ]
+}
+
+所有數值皆使用數字，不要加入單位或文字。
+
+confidence 只能是以下三個值之一：
+- high：食物種類與份量都很清楚
+- medium：食物清楚，但份量或烹調方式部分不確定
+- low：圖片模糊、份量不明或食物種類難以辨識
+
+語言：繁體中文，使用台灣常用用語。`;
+
+/**
+ * 把 AI 回傳的各品項加總成一筆紀錄（AI 只估算單一品項，加總一律在這裡處理）
+ * 相容三種格式：{ meal_name, items: [...] }、[...]、單一品項物件
+ */
+function combineFoodItems(data) {
+    let items;
+    let mealName = "";
+    if (Array.isArray(data)) {
+        items = data;
+    } else if (Array.isArray(data?.items)) {
+        items = data.items;
+        mealName = data.meal_name || "";
+    } else {
+        items = [data];
+    }
+
+    // 過濾掉 AI 自行加上的總計項目，避免重複計算
+    items = items.filter(
+        (item) =>
+            item &&
+            !/總計|合計|加總|total/i.test(item.food_name || item.name || ""),
+    );
+    if (items.length === 0) throw new Error("AI 回傳內容沒有可用的食物品項");
+
+    console.log(`💡 共 ${items.length} 個品項，開始合併計算...`);
+
+    // 定義一個小工具：四捨五入到小數點第 1 位
+    const round = (num) => Math.round(num * 10) / 10;
+    // AI 可能回傳字串數字，先轉成數字再加總，避免變成字串串接
+    const sumOf = (key) =>
+        items.reduce((sum, item) => sum + (Number(item[key]) || 0), 0);
+    const nameOf = (item) => item.food_name || item.name || "未知品項";
+
+    return {
+        food_name: mealName || items.map(nameOf).join(" + "),
+        calories: Math.round(sumOf("calories")),
+        protein: round(sumOf("protein")),
+        fat: round(sumOf("fat")),
+        carbs: round(sumOf("carbs")),
+        // 多項食物合併時，取最低的信心等級
+        confidence:
+            ["low", "medium", "high"].find((level) =>
+                items.some((item) => item.confidence === level),
+            ) || "medium",
+        reasoning: items
+            .filter((item) => item.reasoning)
+            .map((item) => `${nameOf(item)}：${item.reasoning}`)
+            .join("\n"),
+    };
+}
+
+/**
  * Gemini 分析
  */
 async function analyzeSessionData(
@@ -382,25 +654,7 @@ async function analyzeSessionData(
             generationConfig: { responseMimeType: "application/json" },
         });
 
-        let promptText = `你是一位具備 10 年經驗、講求「精準數據」與「臨床實務」的資深營養師。
-            請依據以下原則進行飲食評估：
-            1. 份量估算邏輯：若圖中無比例尺，依據台灣外食常見份量（如：一碗、一份）為標準，並於 reasoning 註明估計克數。
-            2. 隱性熱量加權：必須考慮「烹飪方式」。若為煎、炒、油炸或勾芡，應自動加計視覺不可見的油脂與調味料熱量（油脂 1g = 9kcal）。
-            3. 結構化評估：
-            - 澱粉類：分析精緻度（白米 vs 全穀）。
-            - 蛋白質：區分低、中、高脂肪肉類（如：五花肉 vs 里肌肉）。
-            - 隱形熱量：計算醬料、裹粉、炒菜油。
-            4. 回覆格式：請嚴格回覆純 JSON 格式，不得包含任何 Markdown 區塊標籤或額外文字。
-            JSON 結構：
-            {
-            "food_name": "食物名稱",
-            "calories": 數字,
-            "protein": 數字,
-            "fat": 數字,
-            "carbs": 數字,
-            "reasoning": "限 100 字，需包含份量估計及烹飪油脂的考量說明。"
-            }
-            語言規範：請使用繁體中文（台灣語境）。`;
+        let promptText = FOOD_ANALYSIS_PROMPT;
 
         if (texts.length > 0) promptText += `\n補充說明：${texts.join("、")}`;
 
@@ -424,39 +678,10 @@ async function analyzeSessionData(
             data = parseGeminiJson(retryRaw);
         }
 
-        // 如果 AI 回傳的是陣列
-        if (Array.isArray(data)) {
-            console.log("💡 偵測到多項食物，開始合併計算...");
-
-            // 定義一個小工具：四捨五入到小數點第 1 位
-            const round = (num) => Math.round(num * 10) / 10;
-
-            // 把陣列變回單一物件
-            const combinedData = {
-                food_name: data.map((item) => item.food_name).join(" + "),
-                calories: Math.round(
-                    data.reduce((sum, item) => sum + (item.calories || 0), 0),
-                ),
-                protein: round(
-                    data.reduce((sum, item) => sum + (item.protein || 0), 0),
-                ),
-                fat: round(
-                    data.reduce((sum, item) => sum + (item.fat || 0), 0),
-                ),
-                carbs: round(
-                    data.reduce((sum, item) => sum + (item.carbs || 0), 0),
-                ),
-                reasoning: data.map((item) => item.reasoning).join("\n"),
-            };
-            data = combinedData;
-        }
-
-        if (!data.food_name && data.name) data.food_name = data.name;
-
-        return data;
+        return combineFoodItems(data);
     } catch (error) {
         console.error("Gemini Error:", error);
-        if (error?.status === 503) {
+        if (isRetryableGeminiError(error)) {
             const e = new Error("SERVICE_UNAVAILABLE");
             e.is503 = true;
             throw e;
@@ -511,7 +736,7 @@ async function analyzeExercise(
         }
     } catch (error) {
         console.error("運動分析失敗:", error);
-        if (error?.status === 503) {
+        if (isRetryableGeminiError(error)) {
             const e = new Error("SERVICE_UNAVAILABLE");
             e.is503 = true;
             throw e;
@@ -588,6 +813,14 @@ function createSession(userId, session) {
         },
         5 * 60 * 1000,
     );
+}
+
+/**
+ * 判斷 Gemini 錯誤是否可切換模型重試：503 或網路層失敗（fetch failed）
+ */
+function isRetryableGeminiError(error) {
+    if (error?.status === 503) return true;
+    return error instanceof TypeError && error.message === "fetch failed";
 }
 
 function parseGeminiJson(responseText) {

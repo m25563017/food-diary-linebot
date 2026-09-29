@@ -178,6 +178,16 @@ async function handleEvent(event) {
 
     if (session.processing) return;
 
+    // 忙線保留資料中：只接受 Ok（重試）與取消，其他訊息不記錄
+    if (session.awaitingRetry) {
+        const text =
+            event.type === "message" && event.message.type === "text"
+                ? event.message.text.trim()
+                : "";
+        if (text.toLowerCase() !== "ok" && !["取消", "結束"].includes(text))
+            return;
+    }
+
     // --- 運動模式 ---
     if (
         session.mode === "exercise" &&
@@ -227,6 +237,7 @@ async function handleEvent(event) {
                 if (error.is503) {
                     // 保留運動內容，讓使用者稍後直接輸入 Ok 重試
                     session.processing = false;
+                    session.awaitingRetry = true;
                     resetSessionTimer(userId, session);
                     return lineClient.replyMessage(replyToken, {
                         type: "text",
@@ -331,6 +342,7 @@ async function handleEvent(event) {
                     if (error.is503) {
                         // 保留照片與文字，讓使用者稍後直接輸入 Ok 重試
                         session.processing = false;
+                        session.awaitingRetry = true;
                         resetSessionTimer(userId, session);
                         return lineClient.replyMessage(replyToken, {
                             type: "text",

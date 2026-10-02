@@ -216,21 +216,35 @@ async function handleEvent(event) {
 
             session.processing = true;
             try {
-                const userName = await getUserName(userId);
-                const fullText = session.texts.join(" ");
-                const parsed = parseDateAndContent(fullText);
+                let exerciseData, userName, recordDate;
+                if (session.pendingSave) {
+                    // 上次已分析完成、只是寫入 Notion 失敗：直接重試寫入，不再呼叫 Gemini
+                    ({ data: exerciseData, userName, recordDate } =
+                        session.pendingSave);
+                } else {
+                    userName = await getUserName(userId);
+                    const fullText = session.texts.join(" ");
+                    const parsed = parseDateAndContent(fullText);
+                    recordDate = parsed.date;
 
-                const exerciseData = await withModelFallback((modelName) =>
-                    analyzeExercise(parsed.text, defaultUserStats, modelName),
-                );
+                    exerciseData = await withModelFallback((modelName) =>
+                        analyzeExercise(parsed.text, defaultUserStats, modelName),
+                    );
+                }
 
-                await saveExerciseToNotion(exerciseData, userName, parsed.date);
-                delete userSessions[userId];
+                const saved = await trySaveOrKeep(userId, session, {
+                    data: exerciseData,
+                    userName,
+                    recordDate,
+                    save: saveExerciseToNotion,
+                });
 
-                const dateStr = parsed.date.split("T")[0];
+                const dateStr = recordDate.split("T")[0];
                 return lineClient.replyMessage(replyToken, {
                     type: "text",
-                    text: `✅ 運動紀錄完成！(${userName})\n📅 日期：${dateStr}\n🏃 項目：${exerciseData.activity_name}\n🔥 消耗：${exerciseData.calories} kcal\n💡 筆記：${exerciseData.reasoning}`,
+                    text: `${saved ? "✅ 運動紀錄完成！" : "🏃 運動分析完成！"}(${userName})\n📅 日期：${dateStr}\n🏃 項目：${exerciseData.activity_name}\n🔥 消耗：${exerciseData.calories} kcal\n💡 筆記：${exerciseData.reasoning}${
+                        saved ? "" : NOTION_SAVE_FAILED_NOTE
+                    }`,
                 });
             } catch (error) {
                 console.error(error);
@@ -296,33 +310,46 @@ async function handleEvent(event) {
 
                 session.processing = true;
                 try {
-                    let finalDate = new Date().toISOString();
-                    let cleanTexts = [];
+                    let foodData, userName, finalDate;
+                    if (session.pendingSave) {
+                        // 上次已分析完成、只是寫入 Notion 失敗：直接重試寫入，不再呼叫 Gemini
+                        ({
+                            data: foodData,
+                            userName,
+                            recordDate: finalDate,
+                        } = session.pendingSave);
+                    } else {
+                        finalDate = new Date().toISOString();
+                        let cleanTexts = [];
 
-                    for (let t of session.texts) {
-                        const parsed = parseDateAndContent(t);
-                        if (parsed.found) {
-                            finalDate = parsed.date;
+                        for (let t of session.texts) {
+                            const parsed = parseDateAndContent(t);
+                            if (parsed.found) {
+                                finalDate = parsed.date;
+                            }
+                            if (parsed.text.length > 0) {
+                                cleanTexts.push(parsed.text);
+                            }
                         }
-                        if (parsed.text.length > 0) {
-                            cleanTexts.push(parsed.text);
-                        }
+
+                        foodData = await withModelFallback((modelName) =>
+                            analyzeSessionData(
+                                session.images,
+                                cleanTexts,
+                                modelName,
+                            ),
+                        );
+
+                        userName = await getUserName(userId);
                     }
 
-                    const foodData = await withModelFallback((modelName) =>
-                        analyzeSessionData(
-                            session.images,
-                            cleanTexts,
-                            modelName,
-                        ),
-                    );
-
-                    const userName = await getUserName(userId);
-
                     // 存檔
-                    await saveToNotion(foodData, userName, finalDate);
-
-                    delete userSessions[userId];
+                    const saved = await trySaveOrKeep(userId, session, {
+                        data: foodData,
+                        userName,
+                        recordDate: finalDate,
+                        save: saveToNotion,
+                    });
 
                     const cals = foodData.calories || 0;
                     const dateStr = finalDate.split("T")[0];
@@ -335,7 +362,7 @@ async function handleEvent(event) {
                             foodData.protein || 0
                         }g\n🥔 碳水：${foodData.carbs || 0}g\n🥓 脂肪：${
                             foodData.fat || 0
-                        }g\n\n已寫入資料庫喵！`,
+                        }g${saved ? "\n\n已寫入資料庫喵！" : NOTION_SAVE_FAILED_NOTE}`,
                     });
                 } catch (error) {
                     console.error(error);
@@ -814,6 +841,28 @@ function createSession(userId, session) {
     resetSessionTimer(userId, session);
 }
 
+const NOTION_SAVE_FAILED_NOTE =
+    "\n\n⚠️ 寫入 Notion 時發生錯誤，請稍後再輸入「Ok」重試一次喵（保留 5 分鐘）";
+
+/**
+ * 寫入 Notion：成功就清除 session 並回傳 true；
+ * 失敗則把分析結果存進 session.pendingSave，讓使用者輸入 Ok 時只重試寫入，回傳 false
+ */
+async function trySaveOrKeep(userId, session, { data, userName, recordDate, save }) {
+    try {
+        await save(data, userName, recordDate);
+        delete userSessions[userId];
+        return true;
+    } catch (error) {
+        console.error("寫入 Notion 失敗:", error);
+        session.pendingSave = { data, userName, recordDate };
+        session.processing = false;
+        session.awaitingRetry = true;
+        resetSessionTimer(userId, session);
+        return false;
+    }
+}
+
 /**
  * 重新計算 session 的過期時間（從現在起 SESSION_TTL_MS 後清除）
  */
@@ -830,10 +879,12 @@ function resetSessionTimer(userId, session) {
  * - 503：模型滿載
  * - 429：該模型額度用完（免費額度依模型分開計算，換模型通常可用）
  * - fetch failed：網路層失敗
+ *   SDK 會把原本的 TypeError 包成 GoogleGenerativeAIError，
+ *   訊息變成「...Error fetching from <url>: fetch failed」，所以用訊息結尾判斷
  */
 function isRetryableGeminiError(error) {
     if (error?.status === 503 || error?.status === 429) return true;
-    return error instanceof TypeError && error.message === "fetch failed";
+    return /fetch failed$/.test(error?.message || "");
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
